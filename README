@@ -1,0 +1,5 @@
+This repository contains two scripts, mypgrep and compact_innodb.
+Each script has --help which should provide details of its use.  They
+rely on various utilities libraries from the gmt (Google mysql tools)
+library.
+

@@ -80,7 +80,7 @@ import sys
 import threading
 import time
 
-import compat_logging as logging
+from gmt import compat_logging as logging
 
 
 ###############################################################################

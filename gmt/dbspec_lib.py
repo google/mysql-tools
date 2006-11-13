@@ -24,8 +24,8 @@ __author__ = 'chip@google.com (Chip Turner)'
 import MySQLdb
 import subprocess
 
-import compat_logging as logging
-import compat_flags as flags
+from gmt import compat_logging as logging
+from gmt import compat_flags as flags
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string("stop_mysql_command", "sudo /etc/init.d/mysql stop",

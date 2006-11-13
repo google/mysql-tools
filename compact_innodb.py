@@ -39,13 +39,13 @@ import subprocess
 import sys
 import time
 
-import command_pool
-import config_helper
+from gmt import command_pool
+from gmt import config_helper
 config_helper.Init() # here instead of __main__ because we need the
                      # defaults for our string defines
-import compat_logging as logging
-import compat_flags as flags
-import dbspec_lib
+from gmt import compat_logging as logging
+from gmt import compat_flags as flags
+from gmt import dbspec_lib
 
 FLAGS = flags.FLAGS
 flags.DEFINE_integer("num_readers", 6, "number of parallel readers (mysqldump)")

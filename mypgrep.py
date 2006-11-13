@@ -35,13 +35,13 @@ import termios
 import threading
 import time
 
-import thread_pool
-import config_helper
+from gmt import thread_pool
+from gmt import config_helper
 config_helper.Init() # here instead of __main__ because we need the
                      # defaults for our string defines
 
 # comaptibility layer with a google module
-import compat_flags as flags
+from gmt import compat_flags as flags
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string("user", config_helper.GetGlobal("user"),
