@@ -1,4 +1,4 @@
-diff -urN base/mysql-test/lib/mtr_cases.pl mysql50gpl_semi_sync/mysql-test/lib/mtr_cases.pl
+diff -ruN base/mysql-test/lib/mtr_cases.pl mysql50gpl_semi_sync/mysql-test/lib/mtr_cases.pl
 --- base/mysql-test/lib/mtr_cases.pl	2007-03-05 11:40:33.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/lib/mtr_cases.pl	2007-04-28 08:58:32.396580000 -0700
 @@ -324,15 +324,20 @@
@@ -43,7 +43,7 @@ diff -urN base/mysql-test/lib/mtr_cases.pl mysql50gpl_semi_sync/mysql-test/lib/m
    }
  
    if ( -f $master_sh )
-diff -urN base/mysql-test/mysql-test-run.pl mysql50gpl_semi_sync/mysql-test/mysql-test-run.pl
+diff -ruN base/mysql-test/mysql-test-run.pl mysql50gpl_semi_sync/mysql-test/mysql-test-run.pl
 --- base/mysql-test/mysql-test-run.pl	2007-03-05 11:21:11.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/mysql-test-run.pl	2007-04-28 08:57:13.302953000 -0700
 @@ -280,6 +280,7 @@
@@ -140,7 +140,7 @@ diff -urN base/mysql-test/mysql-test-run.pl mysql50gpl_semi_sync/mysql-test/mysq
  
        }
      }
-diff -urN base/mysql-test/r/binlog.result mysql50gpl_semi_sync/mysql-test/r/binlog.result
+diff -ruN base/mysql-test/r/binlog.result mysql50gpl_semi_sync/mysql-test/r/binlog.result
 --- base/mysql-test/r/binlog.result	2007-03-05 11:40:30.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/r/binlog.result	2007-04-27 20:13:57.289323000 -0700
 @@ -1,6 +1,6 @@
@@ -178,7 +178,7 @@ diff -urN base/mysql-test/r/binlog.result mysql50gpl_semi_sync/mysql-test/r/binl
  master-bin.000001	#	Rotate	1	#	master-bin.000002;pos=4
  show binlog events in 'master-bin.000002' from 98;
  Log_name	Pos	Event_type	Server_id	End_log_pos	Info
-diff -urN base/mysql-test/r/rpl_semi_sync.result mysql50gpl_semi_sync/mysql-test/r/rpl_semi_sync.result
+diff -ruN base/mysql-test/r/rpl_semi_sync.result mysql50gpl_semi_sync/mysql-test/r/rpl_semi_sync.result
 --- base/mysql-test/r/rpl_semi_sync.result	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/r/rpl_semi_sync.result	2007-05-01 20:46:11.331887000 -0700
 @@ -0,0 +1,418 @@
@@ -600,7 +600,7 @@ diff -urN base/mysql-test/r/rpl_semi_sync.result mysql50gpl_semi_sync/mysql-test
 +show status like 'Rpl_relay%';
 +Variable_name	Value
 +reset master;
-diff -urN base/mysql-test/r/rpl_show_processlist.result mysql50gpl_semi_sync/mysql-test/r/rpl_show_processlist.result
+diff -ruN base/mysql-test/r/rpl_show_processlist.result mysql50gpl_semi_sync/mysql-test/r/rpl_show_processlist.result
 --- base/mysql-test/r/rpl_show_processlist.result	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/r/rpl_show_processlist.result	2007-04-27 20:14:04.619085000 -0700
 @@ -0,0 +1,323 @@
@@ -927,7 +927,7 @@ diff -urN base/mysql-test/r/rpl_show_processlist.result mysql50gpl_semi_sync/mys
 +#	root	#	test	Query	#	NULL	show processlist
 +#	root	#	test	Sleep	#		NULL
 +#	root	#	NULL	Binlog Dump	#	Has sent all binlog to slave; waiting for binlog to be updated :master-bin.000001:27418:	NULL
-diff -urN base/mysql-test/rpl_transaction_test/README mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/README
+diff -ruN base/mysql-test/rpl_transaction_test/README mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/README
 --- base/mysql-test/rpl_transaction_test/README	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/README	2007-04-27 20:14:07.201025000 -0700
 @@ -0,0 +1,15 @@
@@ -946,7 +946,7 @@ diff -urN base/mysql-test/rpl_transaction_test/README mysql50gpl_semi_sync/mysql
 +  . the first event after start event in slave-relay-bin.000006 should be
 +    - server id -1  end_log_pos 236 	Rotate to master-bin.000001  pos: 11735
 +    - the position "pos: 11735" must be correct
-diff -urN base/mysql-test/rpl_transaction_test/r/rpl000002.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl000002.result
+diff -ruN base/mysql-test/rpl_transaction_test/r/rpl000002.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl000002.result
 --- base/mysql-test/rpl_transaction_test/r/rpl000002.result	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl000002.result	2007-04-27 20:14:07.204029000 -0700
 @@ -0,0 +1,46 @@
@@ -996,7 +996,7 @@ diff -urN base/mysql-test/rpl_transaction_test/r/rpl000002.result mysql50gpl_sem
 +  `created` datetime default NULL
 +) ENGINE=InnoDB DEFAULT CHARSET=latin1
 +drop table t2,t3,t5;
-diff -urN base/mysql-test/rpl_transaction_test/r/rpl_create_database.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_create_database.result
+diff -ruN base/mysql-test/rpl_transaction_test/r/rpl_create_database.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_create_database.result
 --- base/mysql-test/rpl_transaction_test/r/rpl_create_database.result	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_create_database.result	2007-04-27 20:14:07.206024000 -0700
 @@ -0,0 +1,87 @@
@@ -1087,7 +1087,7 @@ diff -urN base/mysql-test/rpl_transaction_test/r/rpl_create_database.result mysq
 +DROP DATABASE IF EXISTS mysqltest_prometheus;
 +DROP DATABASE IF EXISTS mysqltest_sisyfos;
 +DROP DATABASE IF EXISTS mysqltest_bob;
-diff -urN base/mysql-test/rpl_transaction_test/r/rpl_ddl.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_ddl.result
+diff -ruN base/mysql-test/rpl_transaction_test/r/rpl_ddl.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_ddl.result
 --- base/mysql-test/rpl_transaction_test/r/rpl_ddl.result	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_ddl.result	2007-04-27 20:14:07.216023000 -0700
 @@ -0,0 +1,1693 @@
@@ -2784,7 +2784,7 @@ diff -urN base/mysql-test/rpl_transaction_test/r/rpl_ddl.result mysql50gpl_semi_
 +DROP DATABASE IF EXISTS mysqltest1;
 +DROP DATABASE IF EXISTS mysqltest2;
 +DROP DATABASE IF EXISTS mysqltest3;
-diff -urN base/mysql-test/rpl_transaction_test/r/rpl_loaddata.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_loaddata.result
+diff -ruN base/mysql-test/rpl_transaction_test/r/rpl_loaddata.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_loaddata.result
 --- base/mysql-test/rpl_transaction_test/r/rpl_loaddata.result	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_loaddata.result	2007-04-27 20:14:07.223024000 -0700
 @@ -0,0 +1,82 @@
@@ -2870,7 +2870,7 @@ diff -urN base/mysql-test/rpl_transaction_test/r/rpl_loaddata.result mysql50gpl_
 +drop table t2;
 +drop table t2;
 +drop table t1;
-diff -urN base/mysql-test/rpl_transaction_test/r/rpl_log.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_log.result
+diff -ruN base/mysql-test/rpl_transaction_test/r/rpl_log.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_log.result
 --- base/mysql-test/rpl_transaction_test/r/rpl_log.result	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_log.result	2007-04-27 20:14:07.248023000 -0700
 @@ -0,0 +1,128 @@
@@ -3002,7 +3002,7 @@ diff -urN base/mysql-test/rpl_transaction_test/r/rpl_log.result mysql50gpl_semi_
 +5	1
 +6	1
 +drop table t1;
-diff -urN base/mysql-test/rpl_transaction_test/r/rpl_sp.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_sp.result
+diff -ruN base/mysql-test/rpl_transaction_test/r/rpl_sp.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_sp.result
 --- base/mysql-test/rpl_transaction_test/r/rpl_sp.result	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_sp.result	2007-04-27 20:14:07.252026000 -0700
 @@ -0,0 +1,468 @@
@@ -3474,7 +3474,7 @@ diff -urN base/mysql-test/rpl_transaction_test/r/rpl_sp.result mysql50gpl_semi_s
 +DROP PROCEDURE p1;
 +DROP FUNCTION f1;
 +drop table t1;
-diff -urN base/mysql-test/rpl_transaction_test/r/rpl_transaction_001.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_transaction_001.result
+diff -ruN base/mysql-test/rpl_transaction_test/r/rpl_transaction_001.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_transaction_001.result
 --- base/mysql-test/rpl_transaction_test/r/rpl_transaction_001.result	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_transaction_001.result	2007-04-27 20:14:07.298023000 -0700
 @@ -0,0 +1,143 @@
@@ -3621,7 +3621,7 @@ diff -urN base/mysql-test/rpl_transaction_test/r/rpl_transaction_001.result mysq
 +ERROR 42S02: Table 'test.ign1' doesn't exist
 +drop table t1;
 +drop database ignore_db;
-diff -urN base/mysql-test/rpl_transaction_test/r/rpl_user_variables.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_user_variables.result
+diff -ruN base/mysql-test/rpl_transaction_test/r/rpl_user_variables.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_user_variables.result
 --- base/mysql-test/rpl_transaction_test/r/rpl_user_variables.result	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_user_variables.result	2007-04-27 20:14:07.300023000 -0700
 @@ -0,0 +1,131 @@
@@ -3756,7 +3756,7 @@ diff -urN base/mysql-test/rpl_transaction_test/r/rpl_user_variables.result mysql
 +insert into t1 select * FROM (select @var1 union  select @var2) AS t2;
 +drop table t1;
 +stop slave;
-diff -urN base/mysql-test/rpl_transaction_test/r/rpl_view.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_view.result
+diff -ruN base/mysql-test/rpl_transaction_test/r/rpl_view.result mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_view.result
 --- base/mysql-test/rpl_transaction_test/r/rpl_view.result	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/r/rpl_view.result	2007-04-27 20:14:07.349023000 -0700
 @@ -0,0 +1,117 @@
@@ -3877,7 +3877,7 @@ diff -urN base/mysql-test/rpl_transaction_test/r/rpl_view.result mysql50gpl_semi
 +drop table t1;
 +drop view v1;
 +End of 5.0 tests
-diff -urN base/mysql-test/rpl_transaction_test/t/rpl_sp.test mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/t/rpl_sp.test
+diff -ruN base/mysql-test/rpl_transaction_test/t/rpl_sp.test mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/t/rpl_sp.test
 --- base/mysql-test/rpl_transaction_test/t/rpl_sp.test	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/t/rpl_sp.test	2007-04-27 20:14:07.419026000 -0700
 @@ -0,0 +1,522 @@
@@ -4403,12 +4403,12 @@ diff -urN base/mysql-test/rpl_transaction_test/t/rpl_sp.test mysql50gpl_semi_syn
 +connection master;
 +drop table t1;
 +sync_slave_with_master;
-diff -urN base/mysql-test/rpl_transaction_test/t/rpl_transaction_001-slave.opt mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/t/rpl_transaction_001-slave.opt
+diff -ruN base/mysql-test/rpl_transaction_test/t/rpl_transaction_001-slave.opt mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/t/rpl_transaction_001-slave.opt
 --- base/mysql-test/rpl_transaction_test/t/rpl_transaction_001-slave.opt	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/t/rpl_transaction_001-slave.opt	2007-04-27 20:14:07.422030000 -0700
 @@ -0,0 +1 @@
 +-O max_binlog_size=4096 --replicate-ignore-db=ignore_db
-diff -urN base/mysql-test/rpl_transaction_test/t/rpl_transaction_001.test mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/t/rpl_transaction_001.test
+diff -ruN base/mysql-test/rpl_transaction_test/t/rpl_transaction_001.test mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/t/rpl_transaction_001.test
 --- base/mysql-test/rpl_transaction_test/t/rpl_transaction_001.test	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/rpl_transaction_test/t/rpl_transaction_001.test	2007-04-27 20:14:07.452027000 -0700
 @@ -0,0 +1,47 @@
@@ -4459,7 +4459,7 @@ diff -urN base/mysql-test/rpl_transaction_test/t/rpl_transaction_001.test mysql5
 +
 +connection slave;
 +sync_with_master;
-diff -urN base/mysql-test/t/binlog.test mysql50gpl_semi_sync/mysql-test/t/binlog.test
+diff -ruN base/mysql-test/t/binlog.test mysql50gpl_semi_sync/mysql-test/t/binlog.test
 --- base/mysql-test/t/binlog.test	2007-03-05 11:40:21.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/t/binlog.test	2007-04-27 20:14:08.731966000 -0700
 @@ -2,7 +2,6 @@
@@ -4479,17 +4479,17 @@ diff -urN base/mysql-test/t/binlog.test mysql50gpl_semi_sync/mysql-test/t/binlog
  create table t2 (a int) engine=innodb;
  begin;
  insert t1 values (5);
-diff -urN base/mysql-test/t/rpl_semi_sync-master.opt mysql50gpl_semi_sync/mysql-test/t/rpl_semi_sync-master.opt
+diff -ruN base/mysql-test/t/rpl_semi_sync-master.opt mysql50gpl_semi_sync/mysql-test/t/rpl_semi_sync-master.opt
 --- base/mysql-test/t/rpl_semi_sync-master.opt	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/t/rpl_semi_sync-master.opt	2007-04-27 20:14:12.531874000 -0700
 @@ -0,0 +1 @@
 +--rpl_semi_sync_enabled=1 --rpl_semi_sync_timeout=1000
-diff -urN base/mysql-test/t/rpl_semi_sync-slave.opt mysql50gpl_semi_sync/mysql-test/t/rpl_semi_sync-slave.opt
+diff -ruN base/mysql-test/t/rpl_semi_sync-slave.opt mysql50gpl_semi_sync/mysql-test/t/rpl_semi_sync-slave.opt
 --- base/mysql-test/t/rpl_semi_sync-slave.opt	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/t/rpl_semi_sync-slave.opt	2007-04-27 20:14:12.532875000 -0700
 @@ -0,0 +1 @@
 +--rpl_semi_sync_slave_enabled=1
-diff -urN base/mysql-test/t/rpl_semi_sync.test mysql50gpl_semi_sync/mysql-test/t/rpl_semi_sync.test
+diff -ruN base/mysql-test/t/rpl_semi_sync.test mysql50gpl_semi_sync/mysql-test/t/rpl_semi_sync.test
 --- base/mysql-test/t/rpl_semi_sync.test	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/t/rpl_semi_sync.test	2007-04-30 21:37:41.652986000 -0700
 @@ -0,0 +1,118 @@
@@ -4611,7 +4611,7 @@ diff -urN base/mysql-test/t/rpl_semi_sync.test mysql50gpl_semi_sync/mysql-test/t
 +connection master;
 +# Test 'reset master'.
 +reset master;
-diff -urN base/mysql-test/t/rpl_show_processlist.test mysql50gpl_semi_sync/mysql-test/t/rpl_show_processlist.test
+diff -ruN base/mysql-test/t/rpl_show_processlist.test mysql50gpl_semi_sync/mysql-test/t/rpl_show_processlist.test
 --- base/mysql-test/t/rpl_show_processlist.test	1969-12-31 16:00:00.000000000 -0800
 +++ mysql50gpl_semi_sync/mysql-test/t/rpl_show_processlist.test	2007-04-27 20:14:12.544870000 -0700
 @@ -0,0 +1,43 @@
@@ -4658,7 +4658,7 @@ diff -urN base/mysql-test/t/rpl_show_processlist.test mysql50gpl_semi_sync/mysql
 +show processlist;
 +
 +connection slave;
-diff -urN base/mysys/my_thr_init.c mysql50gpl_semi_sync/mysys/my_thr_init.c
+diff -ruN base/mysys/my_thr_init.c mysql50gpl_semi_sync/mysys/my_thr_init.c
 --- base/mysys/my_thr_init.c	2007-03-05 11:21:21.000000000 -0800
 +++ mysql50gpl_semi_sync/mysys/my_thr_init.c	2007-04-27 20:14:14.884787000 -0700
 @@ -47,6 +47,8 @@
@@ -4670,7 +4670,7 @@ diff -urN base/mysys/my_thr_init.c mysql50gpl_semi_sync/mysys/my_thr_init.c
  #ifdef NPTL_PTHREAD_EXIT_BUG /* see my_pthread.h */
  
  /*
-diff -urN base/sql/Makefile.am mysql50gpl_semi_sync/sql/Makefile.am
+diff -ruN base/sql/Makefile.am mysql50gpl_semi_sync/sql/Makefile.am
 --- base/sql/Makefile.am	2007-03-05 11:21:40.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/Makefile.am	2007-04-30 22:05:26.195096000 -0700
 @@ -67,7 +67,9 @@
@@ -4693,7 +4693,7 @@ diff -urN base/sql/Makefile.am mysql50gpl_semi_sync/sql/Makefile.am
  
  gen_lex_hash_SOURCES =	gen_lex_hash.cc
  gen_lex_hash_LDADD =	$(LDADD) $(CXXLDFLAGS)
-diff -urN base/sql/Makefile.in mysql50gpl_semi_sync/sql/Makefile.in
+diff -ruN base/sql/Makefile.in mysql50gpl_semi_sync/sql/Makefile.in
 --- base/sql/Makefile.in	2007-03-05 11:23:21.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/Makefile.in	2007-04-27 21:12:08.997374000 -0700
 @@ -151,7 +151,8 @@
@@ -4741,7 +4741,7 @@ diff -urN base/sql/Makefile.in mysql50gpl_semi_sync/sql/Makefile.in
  @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/set_var.Po@am__quote@
  @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/slave.Po@am__quote@
  @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/sp.Po@am__quote@
-diff -urN base/sql/ha_innodb.cc mysql50gpl_semi_sync/sql/ha_innodb.cc
+diff -ruN base/sql/ha_innodb.cc mysql50gpl_semi_sync/sql/ha_innodb.cc
 --- base/sql/ha_innodb.cc	2007-03-05 11:21:41.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/ha_innodb.cc	2007-04-28 11:11:30.405009000 -0700
 @@ -43,6 +43,7 @@
@@ -4909,7 +4909,7 @@ diff -urN base/sql/ha_innodb.cc mysql50gpl_semi_sync/sql/ha_innodb.cc
 +}
 +
  #endif /* HAVE_INNOBASE_DB */
-diff -urN base/sql/ha_innodb.h mysql50gpl_semi_sync/sql/ha_innodb.h
+diff -ruN base/sql/ha_innodb.h mysql50gpl_semi_sync/sql/ha_innodb.h
 --- base/sql/ha_innodb.h	2007-03-05 11:21:41.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/ha_innodb.h	2007-04-28 08:29:02.894620000 -0700
 @@ -31,6 +31,7 @@
@@ -4954,7 +4954,7 @@ diff -urN base/sql/ha_innodb.h mysql50gpl_semi_sync/sql/ha_innodb.h
  void innobase_store_binlog_offset_and_flush_log(char *binlog_name,longlong offset);
  #endif
  
-diff -urN base/sql/handler.cc mysql50gpl_semi_sync/sql/handler.cc
+diff -ruN base/sql/handler.cc mysql50gpl_semi_sync/sql/handler.cc
 --- base/sql/handler.cc	2007-03-05 11:21:13.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/handler.cc	2007-04-27 21:44:03.295339000 -0700
 @@ -2783,3 +2783,55 @@
@@ -5013,7 +5013,7 @@ diff -urN base/sql/handler.cc mysql50gpl_semi_sync/sql/handler.cc
 +  return 0;
 +}
 +
-diff -urN base/sql/handler.h mysql50gpl_semi_sync/sql/handler.h
+diff -ruN base/sql/handler.h mysql50gpl_semi_sync/sql/handler.h
 --- base/sql/handler.h	2007-03-05 11:21:22.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/handler.h	2007-04-27 21:42:24.622112000 -0700
 @@ -969,3 +969,7 @@
@@ -5024,7 +5024,7 @@ diff -urN base/sql/handler.h mysql50gpl_semi_sync/sql/handler.h
 +int ha_report_binlog_offset_and_commit(THD *thd, char *log_file_name,
 +                                       my_off_t end_offset);
 +int ha_commit_complete(THD *thd);
-diff -urN base/sql/log.cc mysql50gpl_semi_sync/sql/log.cc
+diff -ruN base/sql/log.cc mysql50gpl_semi_sync/sql/log.cc
 --- base/sql/log.cc	2007-03-05 11:21:42.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/log.cc	2007-04-27 21:36:45.711590000 -0700
 @@ -1605,6 +1605,7 @@
@@ -5140,7 +5140,7 @@ diff -urN base/sql/log.cc mysql50gpl_semi_sync/sql/log.cc
    pthread_cond_wait(&update_cond, &LOCK_log);
    thd->exit_cond(old_msg);
    DBUG_VOID_RETURN;
-diff -urN base/sql/mysql_priv.h mysql50gpl_semi_sync/sql/mysql_priv.h
+diff -ruN base/sql/mysql_priv.h mysql50gpl_semi_sync/sql/mysql_priv.h
 --- base/sql/mysql_priv.h	2007-03-05 11:21:40.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/mysql_priv.h	2007-04-27 21:30:40.368792000 -0700
 @@ -448,6 +448,7 @@
@@ -5179,7 +5179,7 @@ diff -urN base/sql/mysql_priv.h mysql50gpl_semi_sync/sql/mysql_priv.h
  #endif /* MYSQL_CLIENT */
  
  #endif
-diff -urN base/sql/mysqld.cc mysql50gpl_semi_sync/sql/mysqld.cc
+diff -ruN base/sql/mysqld.cc mysql50gpl_semi_sync/sql/mysqld.cc
 --- base/sql/mysqld.cc	2007-03-05 11:21:11.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/mysqld.cc	2007-04-30 21:39:31.712696000 -0700
 @@ -32,6 +32,7 @@
@@ -5304,14 +5304,28 @@ diff -urN base/sql/mysqld.cc mysql50gpl_semi_sync/sql/mysqld.cc
    {"Rpl_status",               (char*) 0,                 SHOW_RPL_STATUS},
    {"Select_full_join",         (char*) offsetof(STATUS_VAR, select_full_join_count), SHOW_LONG_STATUS},
    {"Select_full_range_join",   (char*) offsetof(STATUS_VAR, select_full_range_join_count), SHOW_LONG_STATUS},
-diff -urN base/sql/repl_semi_sync.cc mysql50gpl_semi_sync/sql/repl_semi_sync.cc
+diff -ruN base/sql/repl_semi_sync.cc mysql50gpl_semi_sync/sql/repl_semi_sync.cc
 --- base/sql/repl_semi_sync.cc	1969-12-31 16:00:00.000000000 -0800
-+++ mysql50gpl_semi_sync/sql/repl_semi_sync.cc	2007-04-30 23:30:08.646443000 -0700
-@@ -0,0 +1,1210 @@
-+/* Copyright 2006 Google Inc. All Rights Reserved.;
-+ * Author: wei@google.com (Wei Li)
-+ *
-+ * The file defines two classes that implement semi-sync replication based on
++++ mysql50gpl_semi_sync/sql/repl_semi_sync.cc	2007-05-02 11:38:58.423312000 -0700
+@@ -0,0 +1,1224 @@
++/* Copyright (C) 2007 Google Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
++*/
++
++/* The file defines two classes that implement semi-sync replication based on
 + * MySQL's asynchronous replication:
 + *  . ReplSemiSync::ActiveTranx: manage all active transaction nodes
 + *  . ReplSemiSync: the code flow for semi-sync replication
@@ -6518,14 +6532,28 @@ diff -urN base/sql/repl_semi_sync.cc mysql50gpl_semi_sync/sql/repl_semi_sync.cc
 +
 +  return (int)(end_usecs - start_usecs);
 +}
-diff -urN base/sql/repl_semi_sync.h mysql50gpl_semi_sync/sql/repl_semi_sync.h
+diff -ruN base/sql/repl_semi_sync.h mysql50gpl_semi_sync/sql/repl_semi_sync.h
 --- base/sql/repl_semi_sync.h	1969-12-31 16:00:00.000000000 -0800
-+++ mysql50gpl_semi_sync/sql/repl_semi_sync.h	2007-04-30 23:18:00.815187000 -0700
-@@ -0,0 +1,435 @@
-+/* Copyright 2007 Google Inc. All Rights Reserved.
-+ * Author: wei@google.com (Wei Li)
-+ *
-+ * ReplSemiSync class is reponsible for semi synchronous replication.  The
++++ mysql50gpl_semi_sync/sql/repl_semi_sync.h	2007-05-02 11:38:40.001864000 -0700
+@@ -0,0 +1,449 @@
++/* Copyright (C) 2007 Google Inc.
++
++This program is free software; you can redistribute it and/or
++modify it under the terms of the GNU General Public License
++as published by the Free Software Foundation; either version 2
++of the License, or (at your option) any later version.
++
++This program is distributed in the hope that it will be useful,
++but WITHOUT ANY WARRANTY; without even the implied warranty of
++MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++GNU General Public License for more details.
++
++You should have received a copy of the GNU General Public License
++along with this program; if not, write to the Free Software
++Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
++*/
++
++/* ReplSemiSync class is reponsible for semi synchronous replication.  The
 + * general idea of semi-sync replication is the master database need to make
 + * sure that the slave database receives its replication events before telling
 + * the client that a transaction has been committed.  The difference between
@@ -6957,7 +6985,7 @@ diff -urN base/sql/repl_semi_sync.h mysql50gpl_semi_sync/sql/repl_semi_sync.h
 +};
 +
 +#endif   /* REPL_SEMI_SYNC_H__ */
-diff -urN base/sql/set_var.cc mysql50gpl_semi_sync/sql/set_var.cc
+diff -ruN base/sql/set_var.cc mysql50gpl_semi_sync/sql/set_var.cc
 --- base/sql/set_var.cc	2007-03-05 11:21:24.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/set_var.cc	2007-04-30 21:40:18.570291000 -0700
 @@ -67,6 +67,9 @@
@@ -7073,7 +7101,7 @@ diff -urN base/sql/set_var.cc mysql50gpl_semi_sync/sql/set_var.cc
  static void fix_max_relay_log_size(THD *thd, enum_var_type type)
  {
    DBUG_ENTER("fix_max_relay_log_size");
-diff -urN base/sql/slave.cc mysql50gpl_semi_sync/sql/slave.cc
+diff -ruN base/sql/slave.cc mysql50gpl_semi_sync/sql/slave.cc
 --- base/sql/slave.cc	2007-03-05 11:21:12.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/slave.cc	2007-04-30 21:41:37.088912000 -0700
 @@ -25,11 +25,15 @@
@@ -7230,7 +7258,7 @@ diff -urN base/sql/slave.cc mysql50gpl_semi_sync/sql/slave.cc
          // re-acquire data lock since we released it earlier
          pthread_mutex_lock(&rli->data_lock);
          rli->last_master_timestamp= save_timestamp;
-diff -urN base/sql/sql_class.cc mysql50gpl_semi_sync/sql/sql_class.cc
+diff -ruN base/sql/sql_class.cc mysql50gpl_semi_sync/sql/sql_class.cc
 --- base/sql/sql_class.cc	2007-03-05 11:21:41.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/sql_class.cc	2007-04-27 20:59:11.375893000 -0700
 @@ -180,7 +180,7 @@
@@ -7242,7 +7270,7 @@ diff -urN base/sql/sql_class.cc mysql50gpl_semi_sync/sql/sql_class.cc
  {
    stmt_arena= this;
    thread_stack= 0;
-diff -urN base/sql/sql_class.h mysql50gpl_semi_sync/sql/sql_class.h
+diff -ruN base/sql/sql_class.h mysql50gpl_semi_sync/sql/sql_class.h
 --- base/sql/sql_class.h	2007-03-05 11:21:40.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/sql_class.h	2007-04-27 20:57:38.717688000 -0700
 @@ -273,7 +273,7 @@
@@ -7262,7 +7290,7 @@ diff -urN base/sql/sql_class.h mysql50gpl_semi_sync/sql/sql_class.h
  
    /* scramble - random string sent to client on handshake */
    char	     scramble[SCRAMBLE_LENGTH+1];
-diff -urN base/sql/sql_load.cc mysql50gpl_semi_sync/sql/sql_load.cc
+diff -ruN base/sql/sql_load.cc mysql50gpl_semi_sync/sql/sql_load.cc
 --- base/sql/sql_load.cc	2007-03-05 11:21:38.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/sql_load.cc	2007-04-27 20:14:27.168431000 -0700
 @@ -403,9 +403,6 @@
@@ -7285,7 +7313,7 @@ diff -urN base/sql/sql_load.cc mysql50gpl_semi_sync/sql/sql_load.cc
      }
  #endif /*!EMBEDDED_LIBRARY*/
      error= -1;				// Error on read
-diff -urN base/sql/sql_parse.cc mysql50gpl_semi_sync/sql/sql_parse.cc
+diff -ruN base/sql/sql_parse.cc mysql50gpl_semi_sync/sql/sql_parse.cc
 --- base/sql/sql_parse.cc	2007-03-05 11:21:40.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/sql_parse.cc	2007-04-28 11:02:48.210676000 -0700
 @@ -33,6 +33,8 @@
@@ -7316,7 +7344,7 @@ diff -urN base/sql/sql_parse.cc mysql50gpl_semi_sync/sql/sql_parse.cc
      select_result *result=lex->result;
      if (all_tables)
      {
-diff -urN base/sql/sql_repl.cc mysql50gpl_semi_sync/sql/sql_repl.cc
+diff -ruN base/sql/sql_repl.cc mysql50gpl_semi_sync/sql/sql_repl.cc
 --- base/sql/sql_repl.cc	2007-03-05 11:21:22.000000000 -0800
 +++ mysql50gpl_semi_sync/sql/sql_repl.cc	2007-04-30 22:17:40.956084000 -0700
 @@ -19,6 +19,13 @@
