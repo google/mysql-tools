@@ -1033,7 +1033,6 @@ diff --recursive -u base5067/innobase/include/sync0sync.h m5067/innobase/include
  	os_fast_mutex_t
  		os_fast_mutex;	/* In other systems we use this OS mutex
  				in place of lock_word */
-Only in m5067/innobase/include: sync0sync.h~
 diff --recursive -u base5067/innobase/include/sync0sync.ic m5067/innobase/include/sync0sync.ic
 --- base5067/innobase/include/sync0sync.ic	2008-08-04 05:19:15.000000000 -0700
 +++ m5067/innobase/include/sync0sync.ic	2008-09-08 06:54:12.000000000 -0700
@@ -1142,7 +1141,6 @@ diff --recursive -u base5067/innobase/include/sync0sync.ic m5067/innobase/includ
  				lock_word is loaded from memory */
  	ut_ad(mutex);
  
-Only in m5067/innobase/include: sync0sync.ic~
 diff --recursive -u base5067/innobase/include/univ.i m5067/innobase/include/univ.i
 --- base5067/innobase/include/univ.i	2008-08-04 05:19:15.000000000 -0700
 +++ m5067/innobase/include/univ.i	2008-09-08 06:53:12.000000000 -0700
@@ -1504,7 +1502,6 @@ diff --recursive -u base5067/innobase/sync/sync0arr.c m5067/innobase/sync/sync0a
          sync_array_exit(arr);
  }
 -
-Only in m5067/innobase/sync: sync0arr.c~
 diff --recursive -u base5067/innobase/sync/sync0rw.c m5067/innobase/sync/sync0rw.c
 --- base5067/innobase/sync/sync0rw.c	2008-08-04 05:19:17.000000000 -0700
 +++ m5067/innobase/sync/sync0rw.c	2008-09-08 06:55:12.000000000 -0700
@@ -2308,7 +2305,6 @@ diff --recursive -u base5067/innobase/sync/sync0rw.c m5067/innobase/sync/sync0rw
  		lock = UT_LIST_GET_NEXT(list, lock);
  	}
  
-Only in m5067/innobase/sync: sync0rw.c~
 diff --recursive -u base5067/innobase/sync/sync0sync.c m5067/innobase/sync/sync0sync.c
 --- base5067/innobase/sync/sync0sync.c	2008-08-04 05:19:17.000000000 -0700
 +++ m5067/innobase/sync/sync0sync.c	2008-09-08 06:54:53.000000000 -0700
@@ -2428,7 +2424,6 @@ diff --recursive -u base5067/innobase/sync/sync0sync.c m5067/innobase/sync/sync0
  }
  
  /***********************************************************************
-Only in m5067/innobase/sync: sync0sync.c~
 diff --recursive -u base5067/libmysqld/ha_innodb.cc m5067/libmysqld/ha_innodb.cc
 --- base5067/libmysqld/ha_innodb.cc	2008-08-04 05:20:03.000000000 -0700
 +++ m5067/libmysqld/ha_innodb.cc	2008-09-08 06:53:12.000000000 -0700
