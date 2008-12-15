@@ -1,0 +1,337 @@
+--- orig/innobase/include/sync0rw.h	2008-12-13 09:15:23.000000000 -0800
++++ new/innobase/include/sync0rw.h	2008-12-13 11:59:14.000000000 -0800
+@@ -407,6 +407,13 @@
+ /*================*/
+ 	rw_lock_debug_t*	info);	/* in: debug struct */
+ #endif /* UNIV_SYNC_DEBUG */
++
++#define os_latch_t pthread_mutex_t
++#define os_latch_enter(m) pthread_mutex_lock(m)
++#define os_latch_exit(m)  pthread_mutex_unlock(m)
++#define os_latch_create(m) pthread_mutex_init(m, MY_MUTEX_INIT_FAST)
++#define os_latch_set_level(m,l)
++#define os_latch_free(m)  pthread_mutex_destroy(m)
+ 
+ /* NOTE! The structure appears here only for the compiler to know its size.
+ Do not use its fields directly! The structure used in the spin lock
+@@ -441,7 +448,7 @@
+ 	ulint	writer_count;	/* Number of times the same thread has
+ 				recursively locked the lock in the exclusive
+ 				mode */
+-	mutex_t	mutex;		/* The mutex protecting rw_lock_struct */
++	os_latch_t	mutex;		/* The mutex protecting rw_lock_struct */
+ 	ulint	pass; 		/* Default value 0. This is set to some
+ 				value != 0 given by the caller of an x-lock
+ 				operation, if the x-lock is to be passed to
+--- orig/innobase/include/sync0rw.ic	2008-12-13 09:15:23.000000000 -0800
++++ new/innobase/include/sync0rw.ic	2008-12-13 11:59:14.000000000 -0800
+@@ -97,7 +97,7 @@
+ 	lock->reader_count = count;
+ }
+ UNIV_INLINE
+-mutex_t*
++os_latch_t*
+ rw_lock_get_mutex(
+ /*==============*/
+ 	rw_lock_t*	lock)
+@@ -241,15 +241,15 @@
+ 	ut_ad(!rw_lock_own(lock, RW_LOCK_SHARED)); /* see NOTE above */
+ #endif /* UNIV_SYNC_DEBUG */
+ 
+-	mutex_enter(rw_lock_get_mutex(lock));
++	os_latch_enter(rw_lock_get_mutex(lock));
+ 
+ 	if (UNIV_LIKELY(rw_lock_s_lock_low(lock, pass, file_name, line))) {
+-		mutex_exit(rw_lock_get_mutex(lock));
++		os_latch_exit(rw_lock_get_mutex(lock));
+ 
+ 		return; /* Success */
+ 	} else {
+ 		/* Did not succeed, try spin wait */
+-		mutex_exit(rw_lock_get_mutex(lock));
++		os_latch_exit(rw_lock_get_mutex(lock));
+ 
+ 		rw_lock_s_lock_spin(lock, pass, file_name, line);
+ 
+@@ -272,7 +272,7 @@
+ {
+ 	ibool	success	= FALSE;
+ 
+-	mutex_enter(rw_lock_get_mutex(lock));
++	os_latch_enter(rw_lock_get_mutex(lock));
+ 
+ 	if (lock->writer == RW_LOCK_NOT_LOCKED) {
+ 		/* Set the shared lock by incrementing the reader count */
+@@ -289,7 +289,7 @@
+ 		success = TRUE;
+ 	}
+ 
+-	mutex_exit(rw_lock_get_mutex(lock));
++	os_latch_exit(rw_lock_get_mutex(lock));
+ 
+ 	return(success);
+ }
+@@ -309,7 +309,7 @@
+ {
+ 	ibool		success		= FALSE;
+ 	os_thread_id_t	curr_thread	= os_thread_get_curr_id();
+-	mutex_enter(rw_lock_get_mutex(lock));
++	os_latch_enter(rw_lock_get_mutex(lock));
+ 
+ 	if (UNIV_UNLIKELY(rw_lock_get_reader_count(lock) != 0)) {
+ 	} else if (UNIV_LIKELY(rw_lock_get_writer(lock)
+@@ -334,7 +334,7 @@
+ 		goto relock;
+ 	}
+ 
+-	mutex_exit(rw_lock_get_mutex(lock));
++	os_latch_exit(rw_lock_get_mutex(lock));
+ 
+         ut_ad(rw_lock_validate(lock));
+ 
+@@ -354,11 +354,11 @@
+ #endif
+ 	)
+ {
+-	mutex_t*	mutex	= &(lock->mutex);
++	os_latch_t*	mutex	= &(lock->mutex);
+ 	ibool		sg 	= FALSE;
+ 
+         /* Acquire the mutex protecting the rw-lock fields */
+-	mutex_enter(mutex);
++	os_latch_enter(mutex);
+ 
+ 	/* Reset the shared lock by decrementing the reader count */
+ 
+@@ -379,7 +379,7 @@
+ 		rw_lock_set_waiters(lock, 0);
+ 	}
+ 	
+-	mutex_exit(mutex);
++	os_latch_exit(mutex);
+ 
+ 	if (UNIV_UNLIKELY(sg)) {
+ #ifdef __WIN__
+@@ -438,7 +438,7 @@
+ 	ibool	sg 	= FALSE;
+ 
+         /* Acquire the mutex protecting the rw-lock fields */
+-	mutex_enter(&(lock->mutex));
++	os_latch_enter(&(lock->mutex));
+ 
+ 	/* Reset the exclusive lock if this thread no longer has an x-mode
+ 	lock */
+@@ -463,7 +463,7 @@
+ 		rw_lock_set_waiters(lock, 0);
+ 	}
+ 	
+-	mutex_exit(&(lock->mutex));
++	os_latch_exit(&(lock->mutex));
+ 
+ 	if (UNIV_UNLIKELY(sg)) {
+ #ifdef __WIN__
+--- orig/innobase/sync/sync0rw.c	2008-12-13 09:15:23.000000000 -0800
++++ new/innobase/sync/sync0rw.c	2008-12-13 11:59:15.000000000 -0800
+@@ -99,11 +99,12 @@
+ 	object is created, then the following call initializes
+ 	the sync system. */
+ 
+-	mutex_create(rw_lock_get_mutex(lock));
+-	mutex_set_level(rw_lock_get_mutex(lock), SYNC_NO_ORDER_CHECK);
+-
+-	lock->mutex.cfile_name = cfile_name;
+-	lock->mutex.cline = cline;
++	os_latch_create(rw_lock_get_mutex(lock));
++	os_latch_set_level(rw_lock_get_mutex(lock), SYNC_NO_ORDER_CHECK);
++
++	// lock->mutex.cfile_name = cfile_name;
++	// lock->mutex.cline = cline;
++
+ #if defined UNIV_DEBUG && !defined UNIV_HOTBACKUP
+ 	lock->mutex.cmutex_name = cmutex_name;
+ 	lock->mutex.mutex_type = 1;
+@@ -166,7 +167,7 @@
+ 	
+ 	lock->magic_n = 0;
+ 
+-	mutex_free(rw_lock_get_mutex(lock));
++	os_latch_free(rw_lock_get_mutex(lock));
+ 
+ 	mutex_enter(&rw_lock_list_mutex);
+ 	os_event_free(lock->event);
+@@ -198,7 +199,7 @@
+ {
+ 	ut_a(lock);
+ 
+-	mutex_enter(rw_lock_get_mutex(lock));
++	os_latch_enter(rw_lock_get_mutex(lock));
+ 
+ 	ut_a(lock->magic_n == RW_LOCK_MAGIC_N);
+ 	ut_a((rw_lock_get_reader_count(lock) == 0)
+@@ -210,7 +211,7 @@
+ 	     || (rw_lock_get_waiters(lock) == 1));
+ 	ut_a((lock->writer != RW_LOCK_EX) || (lock->writer_count > 0));
+ 	     
+-	mutex_exit(rw_lock_get_mutex(lock));
++	os_latch_exit(rw_lock_get_mutex(lock));
+ 
+ 	return(TRUE);
+ }
+@@ -263,12 +264,12 @@
+ 		lock->cfile_name, (ulong) lock->cline, (ulong) i);
+ 	}
+ 
+-	mutex_enter(rw_lock_get_mutex(lock));
++	os_latch_enter(rw_lock_get_mutex(lock));
+ 
+         /* We try once again to obtain the lock */
+ 
+ 	if (TRUE == rw_lock_s_lock_low(lock, pass, file_name, line)) {
+-		mutex_exit(rw_lock_get_mutex(lock));
++		os_latch_exit(rw_lock_get_mutex(lock));
+ 
+ 		return; /* Success */
+ 	} else {
+@@ -284,7 +285,7 @@
+ 
+ 		rw_lock_set_waiters(lock, 1);
+ 
+-		mutex_exit(rw_lock_get_mutex(lock));
++		os_latch_exit(rw_lock_get_mutex(lock));
+ 
+ 		if (srv_print_latch_waits) {
+ 			fprintf(stderr,
+@@ -319,13 +320,13 @@
+ {
+ 	ut_ad(rw_lock_is_locked(lock, RW_LOCK_EX));
+ 
+-	mutex_enter(&(lock->mutex));
++	os_latch_enter(&(lock->mutex));
+ 
+ 	lock->writer_thread = os_thread_get_curr_id();
+ 
+ 	lock->pass = 0;
+ 
+-	mutex_exit(&(lock->mutex));
++	os_latch_exit(&(lock->mutex));
+ }
+ 
+ /**********************************************************************
+@@ -457,11 +458,11 @@
+ 
+ lock_loop:
+         /* Acquire the mutex protecting the rw-lock fields */
+-	mutex_enter_fast(&(lock->mutex));
++	os_latch_enter(&(lock->mutex));
+ 
+ 	state = rw_lock_x_lock_low(lock, pass, file_name, line);
+ 		
+-	mutex_exit(&(lock->mutex));
++	os_latch_exit(&(lock->mutex));
+         
+ 	if (state == RW_LOCK_EX) {
+ 
+@@ -524,12 +525,12 @@
+         /* We try once again to obtain the lock. Acquire the mutex protecting
+ 	the rw-lock fields */
+ 
+-	mutex_enter(rw_lock_get_mutex(lock));
++	os_latch_enter(rw_lock_get_mutex(lock));
+ 
+ 	state = rw_lock_x_lock_low(lock, pass, file_name, line);
+ 
+ 	if (state == RW_LOCK_EX) {
+-		mutex_exit(rw_lock_get_mutex(lock));
++		os_latch_exit(rw_lock_get_mutex(lock));
+ 
+ 		return;	/* Locking succeeded */
+ 	}
+@@ -551,7 +552,7 @@
+ 
+ 	rw_lock_set_waiters(lock, 1);
+ 
+-	mutex_exit(rw_lock_get_mutex(lock));
++	os_latch_exit(rw_lock_get_mutex(lock));
+ 
+ 	if (srv_print_latch_waits) {
+ 		fprintf(stderr,
+@@ -726,7 +727,7 @@
+ 	ut_ad(lock);
+ 	ut_ad(rw_lock_validate(lock));
+ 
+-	mutex_enter(&(lock->mutex));
++	os_latch_enter(&(lock->mutex));
+ 
+ 	info = UT_LIST_GET_FIRST(lock->debug_list);
+ 
+@@ -736,7 +737,7 @@
+ 		    && (info->pass == 0)
+ 		    && (info->lock_type == lock_type)) {
+ 
+-			mutex_exit(&(lock->mutex));
++			os_latch_exit(&(lock->mutex));
+ 		    	/* Found! */
+ 
+ 		    	return(TRUE);
+@@ -744,7 +745,7 @@
+ 
+ 		info = UT_LIST_GET_NEXT(list, info);
+ 	}
+-	mutex_exit(&(lock->mutex));
++	os_latch_exit(&(lock->mutex));
+ 
+ 	return(FALSE);
+ }
+@@ -766,7 +767,7 @@
+ 	ut_ad(lock);
+ 	ut_ad(rw_lock_validate(lock));
+ 	
+-	mutex_enter(&(lock->mutex));
++	os_latch_enter(&(lock->mutex));
+ 
+ 	if (lock_type == RW_LOCK_SHARED) {
+ 		if (lock->reader_count > 0) {
+@@ -780,7 +781,7 @@
+ 		ut_error;
+ 	}
+ 
+-	mutex_exit(&(lock->mutex));
++	os_latch_exit(&(lock->mutex));
+ 
+ 	return(ret);
+ }
+@@ -809,7 +810,7 @@
+ 
+ 		count++;
+ 
+-		mutex_enter(&(lock->mutex));
++		os_latch_enter(&(lock->mutex));
+ 
+ 		if ((rw_lock_get_writer(lock) != RW_LOCK_NOT_LOCKED)
+ 		    || (rw_lock_get_reader_count(lock) != 0)
+@@ -830,7 +831,7 @@
+ 			}
+ 		}
+ 
+-		mutex_exit(&(lock->mutex));
++		os_latch_exit(&(lock->mutex));
+ 		lock = UT_LIST_GET_NEXT(list, lock);
+ 	}
+ 
+@@ -917,14 +918,14 @@
+ 	lock = UT_LIST_GET_FIRST(rw_lock_list);
+ 
+ 	while (lock != NULL) {
+-		mutex_enter(rw_lock_get_mutex(lock));
++		os_latch_enter(rw_lock_get_mutex(lock));
+ 
+ 		if ((rw_lock_get_writer(lock) != RW_LOCK_NOT_LOCKED)
+ 				|| (rw_lock_get_reader_count(lock) != 0)) {
+ 			count++;
+ 		}
+ 
+-		mutex_exit(rw_lock_get_mutex(lock));
++		os_latch_exit(rw_lock_get_mutex(lock));
+ 		lock = UT_LIST_GET_NEXT(list, lock);
+ 	}
+ 
