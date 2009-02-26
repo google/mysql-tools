@@ -1,0 +1,775 @@
+--- orig/sysbench/tests/oltp/sb_oltp.c	2009-02-26 15:01:17.000000000 -0800
++++ new/sysbench/tests/oltp/sb_oltp.c	2009-01-30 10:11:29.000000000 -0800
+@@ -43,15 +43,16 @@
+   {"oltp-test-mode", "test type to use {simple,complex,nontrx,sp}", SB_ARG_TYPE_STRING, "complex"},
+   {"oltp-sp-name", "name of store procedure to call in SP test mode", SB_ARG_TYPE_STRING, ""},
+   {"oltp-read-only", "generate only 'read' queries (do not modify database)", SB_ARG_TYPE_FLAG, "off"},
++  {"oltp-secondary-index", "generate statements that use the secondary index", SB_ARG_TYPE_FLAG, "off"},
+   {"oltp-skip-trx", "skip BEGIN/COMMIT statements", SB_ARG_TYPE_FLAG, "off"},
+   {"oltp-range-size", "range size for range queries", SB_ARG_TYPE_INT, "100"},
+-  {"oltp-point-selects", "number of point selects", SB_ARG_TYPE_INT, "10"},
+-  {"oltp-simple-ranges", "number of simple ranges", SB_ARG_TYPE_INT, "1"},
+-  {"oltp-sum-ranges", "number of sum ranges", SB_ARG_TYPE_INT, "1"},
+-  {"oltp-order-ranges", "number of ordered ranges", SB_ARG_TYPE_INT, "1"},
+-  {"oltp-distinct-ranges", "number of distinct ranges", SB_ARG_TYPE_INT, "1"},
++  {"oltp-point-selects", "number of point selects", SB_ARG_TYPE_INT, "20"},
++  {"oltp-simple-ranges", "number of simple ranges", SB_ARG_TYPE_INT, "2"},
++  {"oltp-sum-ranges", "number of sum ranges", SB_ARG_TYPE_INT, "2"},
++  {"oltp-order-ranges", "number of ordered ranges", SB_ARG_TYPE_INT, "2"},
++  {"oltp-distinct-ranges", "number of distinct ranges", SB_ARG_TYPE_INT, "2"},
+   {"oltp-index-updates", "number of index update", SB_ARG_TYPE_INT, "1"},
+-  {"oltp-non-index-updates", "number of non-index updates", SB_ARG_TYPE_INT, "1"},
++  {"oltp-non-index-updates", "number of non-index updates", SB_ARG_TYPE_INT, ""},
+   {"oltp-nontrx-mode",
+    "mode for non-transactional test {select, update_key, update_nokey, insert, delete}",
+    SB_ARG_TYPE_STRING, "select"},
+@@ -108,6 +109,7 @@
+ {
+   oltp_mode_t   test_mode;
+   unsigned int  read_only;
++  unsigned int  use_secondary_index;
+   unsigned int  skip_trx;
+   unsigned int  auto_inc;
+   unsigned int  range_size;
+@@ -137,14 +139,20 @@
+   db_stmt_t *lock;
+   db_stmt_t *unlock;
+   db_stmt_t *point;
++  db_stmt_t *point_si;
+   db_stmt_t *call;
+   db_stmt_t *range;
++  db_stmt_t *range_si;
+   db_stmt_t *range_sum;
++  db_stmt_t *range_sum_si;
+   db_stmt_t *range_order;
++  db_stmt_t *range_order_si;
+   db_stmt_t *range_distinct;
++  db_stmt_t *range_distinct_si;
+   db_stmt_t *update_index;
+   db_stmt_t *update_non_index;
+   db_stmt_t *delete;
++  db_stmt_t *delete_si;
+   db_stmt_t *insert;
+ } oltp_stmt_set_t;
+ 
+@@ -152,13 +160,19 @@
+ typedef struct
+ {
+   sb_sql_query_point_t  point;
++  sb_sql_query_point_t  point_si;
+   sb_sql_query_range_t  range;
++  sb_sql_query_range_t  range_si;
+   sb_sql_query_range_t  range_sum;
++  sb_sql_query_range_t  range_sum_si;
+   sb_sql_query_range_t  range_order;
++  sb_sql_query_range_t  range_order_si;
+   sb_sql_query_range_t  range_distinct;
++  sb_sql_query_range_t  range_distinct_si;
+   sb_sql_query_update_t update_index;
+   sb_sql_query_update_t update_non_index;
+   sb_sql_query_delete_t delete;
++  sb_sql_query_delete_t delete_si;
+   sb_sql_query_insert_t insert;
+   sb_sql_query_call_t   call;
+   /* Buffer for the 'c' table field in update_non_index and insert queries */
+@@ -331,11 +345,12 @@
+   /* Prepare statement buffer */
+   if (args.auto_inc)
+     snprintf(insert_str, sizeof(insert_str),
+-             "(0,' ','qqqqqqqqqqwwwwwwwwwweeeeeeeeeerrrrrrrrrrtttttttttt')");
++             "(%d,%d,0,' ','qqqqqqqqqqwwwwwwwwwweeeeeeeeeerrrrrrrrrrtttttttttt')",
++             args.table_size, args.table_size);
+   else
+     snprintf(insert_str, sizeof(insert_str),
+-             "(%d,0,' ','qqqqqqqqqqwwwwwwwwwweeeeeeeeeerrrrrrrrrrtttttttttt')",
+-             args.table_size);
++             "(%d,%d,%d,0,' ','qqqqqqqqqqwwwwwwwwwweeeeeeeeeerrrrrrrrrrtttttttttt')",
++             args.table_size, args.table_size, args.table_size);
+   
+   query_len = MAX_QUERY_LEN + nrows * (strlen(insert_str) + 1);
+   query = (char *)malloc(query_len);
+@@ -352,6 +367,7 @@
+            "CREATE TABLE %s ("
+            "id %s %s NOT NULL %s, "
+            "k integer %s DEFAULT '0' NOT NULL, "
++           "o integer %s DEFAULT '0' NOT NULL, "
+            "c char(120) DEFAULT '' NOT NULL, "
+            "pad char(60) DEFAULT '' NOT NULL, "
+            "PRIMARY KEY  (id) "
+@@ -360,6 +376,7 @@
+            (args.auto_inc && driver_caps.serial) ? "SERIAL" : "INTEGER",
+            driver_caps.unsigned_int ? "UNSIGNED" : "",
+            (args.auto_inc && driver_caps.auto_increment) ? "AUTO_INCREMENT" : "",
++           driver_caps.unsigned_int ? "UNSIGNED" : "",
+            driver_caps.unsigned_int ? "UNSIGNED" : "",
+            (table_options_str != NULL) ? table_options_str : ""
+            );
+@@ -393,6 +410,17 @@
+     log_text(LOG_FATAL, "failed to create secondary index on table!");
+     goto error;
+   }
++
++  /* Create secondary index on 'o' */
++  snprintf(query, query_len,
++           "CREATE INDEX o on %s(o)",
++           args.table_name);
++  if (db_query(con, query) == NULL)
++  {
++    log_text(LOG_FATAL, "failed to create secondary index on table!");
++    goto error;
++  }
++
+   /* Fill test table with data */
+   log_text(LOG_NOTICE, "Creating %d records in table '%s'...", args.table_size,
+          args.table_name);
+@@ -401,10 +429,10 @@
+   {
+     /* Build query */
+     if (args.auto_inc)
+-      n = snprintf(query, query_len, "INSERT INTO %s(k, c, pad) VALUES ",
++      n = snprintf(query, query_len, "INSERT INTO %s(k, o, c, pad) VALUES ",
+                    args.table_name);
+     else
+-      n = snprintf(query, query_len, "INSERT INTO %s(id, k, c, pad) VALUES ",
++      n = snprintf(query, query_len, "INSERT INTO %s(id, k, o, c, pad) VALUES ",
+                    args.table_name);
+     if (n >= query_len)
+     {
+@@ -420,11 +448,15 @@
+         goto error;
+       }
+ 
+-      /* Form the values string when if are not using auto_inc */
++      /* Form the values string. */
+       if (!args.auto_inc)
+         snprintf(insert_str, sizeof(insert_str),
+-                 "(%d,0,' ','qqqqqqqqqqwwwwwwwwwweeeeeeeeeerrrrrrrrrrtttttttttt')",
+-                 i + j + 1);
++                 "(%d,%d,%d,' ','qqqqqqqqqqwwwwwwwwwweeeeeeeeeerrrrrrrrrrtttttttttt')",
++                 i + j + 1, i + j + 1, i + j + 1);
++      else
++        snprintf(insert_str, sizeof(insert_str),
++                 "(%d,%d,' ','qqqqqqqqqqwwwwwwwwwweeeeeeeeeerrrrrrrrrrtttttttttt')",
++                 i + j + 1, i + j + 1);
+       
+       if (j == nrows - 1 || i+j == args.table_size -1)
+         n = snprintf(pos, query_len - (pos - query), "%s", insert_str);
+@@ -662,6 +694,8 @@
+ 
+   if (args.read_only)
+     log_text(LOG_NOTICE, "Doing read-only test");
++  if (args.use_secondary_index)
++    log_text(LOG_NOTICE, "Use secondary index");
+   
+   switch (args.dist_type) {
+     case DIST_TYPE_UNIFORM:
+@@ -799,9 +833,29 @@
+   sb_sql_query_t      *query;
+   sb_list_item_t      *pos;
+   sb_list_item_t      *tmp;
+-  unsigned int        i;
++  unsigned int        i, l;
+   unsigned int        range;
+-  
++  unsigned int        n_point_selects, n_simple_ranges, n_sum_ranges;
++  unsigned int        n_order_ranges, n_distinct_ranges;
++  sb_sql_query_type_t query_ty;
++
++  if (args.use_secondary_index)
++  {
++    n_point_selects = (args.point_selects + 1) / 2;
++    n_simple_ranges = (args.simple_ranges + 1) / 2;
++    n_sum_ranges = (args.sum_ranges + 1) / 2;
++    n_order_ranges = (args.order_ranges + 1) / 2;
++    n_distinct_ranges = (args.distinct_ranges + 1) / 2;
++  }
++  else
++  {
++    n_point_selects = args.point_selects;
++    n_simple_ranges = args.simple_ranges;
++    n_sum_ranges = args.sum_ranges;
++    n_order_ranges = args.order_ranges;
++    n_distinct_ranges = args.distinct_ranges;
++  }
++
+   sb_req.type = SB_REQ_TYPE_SQL;
+ 
+   sql_req->queries = (sb_list_t *)malloc(sizeof(sb_list_t));
+@@ -824,99 +878,124 @@
+     query->think_time = 0;
+     SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
+   }
+-  
++
+   /* Generate set of point selects */
+-  for(i = 0; i < args.point_selects; i++)
+-  {
+-    query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
+-    if (query == NULL)
+-      goto memfail;
+-    query->num_times = 1;
+-    query->think_time = get_think_time();
+-    query->type = SB_SQL_QUERY_POINT;
+-    query->u.point_query.id = GET_RANDOM_ID();
+-    query->nrows = 1;
+-    SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
++  for (l = 0, query_ty = SB_SQL_QUERY_POINT;
++       l < 1 || (args.use_secondary_index && l < 2);
++       ++l, query_ty = SB_SQL_QUERY_POINT_SI)
++  {
++    for(i = 0; i < n_point_selects; i++)
++    {
++      query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
++      if (query == NULL)
++        goto memfail;
++      query->num_times = 1;
++      query->think_time = get_think_time();
++      query->type = query_ty;
++      query->u.point_query.id = GET_RANDOM_ID();
++      query->nrows = 1;
++      SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
++    }
+   }
+   
+   /* Generate range queries */
+-  for(i = 0; i < args.simple_ranges; i++)
+-  {
+-    query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
+-    if (query == NULL)
+-      goto memfail;
+-    query->num_times = 1;
+-    query->think_time = get_think_time();
+-    query->type = SB_SQL_QUERY_RANGE;
+-    range = GET_RANDOM_ID();
+-    if (range + args.range_size > args.table_size)
+-      range = args.table_size - args.range_size;
+-    if (range < 1)
+-      range = 1;     
+-    query->u.range_query.from = range;
+-    query->u.range_query.to = range + args.range_size - 1;
+-    query->nrows = args.range_size;
+-    SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
+-  }
+-  
++  for (l = 0, query_ty = SB_SQL_QUERY_RANGE;
++       l < 1 || (args.use_secondary_index && l < 2);
++       ++l, query_ty = SB_SQL_QUERY_RANGE_SI)
++  {
++    for(i = 0; i < n_simple_ranges; i++)
++    {
++      query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
++      if (query == NULL)
++        goto memfail;
++      query->num_times = 1;
++      query->think_time = get_think_time();
++      query->type = query_ty;
++      range = GET_RANDOM_ID();
++      if (range + args.range_size > args.table_size)
++        range = args.table_size - args.range_size;
++      if (range < 1)
++        range = 1;
++      query->u.range_query.from = range;
++      query->u.range_query.to = range + args.range_size - 1;
++      query->nrows = args.range_size;
++      SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
++    }
++  }
++
+   /* Generate sum range queries */
+-  for(i = 0; i < args.sum_ranges; i++)
+-  {
+-    query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
+-    if (query == NULL)
+-      goto memfail;
+-    query->num_times = 1;
+-    query->think_time = get_think_time();
+-    query->type = SB_SQL_QUERY_RANGE_SUM;
+-    range = GET_RANDOM_ID();
+-    if (range + args.range_size > args.table_size)
+-      range = args.table_size - args.range_size;
+-    if (range < 1)
+-      range = 1;
+-    query->u.range_query.from = range;
+-    query->u.range_query.to = range + args.range_size - 1;
+-    query->nrows = 1;
+-    SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
++  for (l = 0, query_ty = SB_SQL_QUERY_RANGE_SUM;
++       l < 1 || (args.use_secondary_index && l < 2);
++       ++l, query_ty = SB_SQL_QUERY_RANGE_SUM_SI)
++  {
++    for(i = 0; i < n_sum_ranges; i++)
++    {
++      query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
++      if (query == NULL)
++        goto memfail;
++      query->num_times = 1;
++      query->think_time = get_think_time();
++      query->type = query_ty;
++      range = GET_RANDOM_ID();
++      if (range + args.range_size > args.table_size)
++        range = args.table_size - args.range_size;
++      if (range < 1)
++        range = 1;
++      query->u.range_query.from = range;
++      query->u.range_query.to = range + args.range_size - 1;
++      query->nrows = 1;
++      SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
++    }
+   }
+ 
+   /* Generate ordered range queries */
+-  for(i = 0; i < args.order_ranges; i++)
+-  {
+-    query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
+-    if (query == NULL)
+-      goto memfail;
+-    query->num_times = 1;
+-    query->think_time = get_think_time();
+-    query->type = SB_SQL_QUERY_RANGE_ORDER;
+-    range = GET_RANDOM_ID();
+-    if (range + args.range_size > args.table_size)
+-      range = args.table_size - args.range_size;
+-    if (range < 1)
+-      range = 1;
+-    query->u.range_query.from = range;
+-    query->u.range_query.to = range + args.range_size - 1;
+-    query->nrows = args.range_size;
+-    SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
++  for (l = 0, query_ty = SB_SQL_QUERY_RANGE_ORDER;
++       l < 1 || (args.use_secondary_index && l < 2);
++       ++l, query_ty = SB_SQL_QUERY_RANGE_ORDER_SI)
++  {
++    for(i = 0; i < n_order_ranges; i++)
++    {
++      query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
++      if (query == NULL)
++        goto memfail;
++      query->num_times = 1;
++      query->think_time = get_think_time();
++      query->type = query_ty;
++      range = GET_RANDOM_ID();
++      if (range + args.range_size > args.table_size)
++        range = args.table_size - args.range_size;
++      if (range < 1)
++        range = 1;
++      query->u.range_query.from = range;
++      query->u.range_query.to = range + args.range_size - 1;
++      query->nrows = args.range_size;
++      SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
++    }
+   }
+ 
+   /* Generate distinct range queries */
+-  for(i = 0; i < args.distinct_ranges; i++)
+-  {
+-    query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
+-    if (query == NULL)
+-      goto memfail;
+-    query->num_times = 1;
+-    query->think_time = get_think_time();
+-    query->type = SB_SQL_QUERY_RANGE_DISTINCT;
+-    range = GET_RANDOM_ID();
+-    if (range + args.range_size > args.table_size)
+-      range = args.table_size - args.range_size;
+-    if (range < 1)
+-      range = 1;     
+-    query->u.range_query.from = range;
+-    query->u.range_query.to = range + args.range_size;
+-    query->nrows = 0;
+-    SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
++  for (l = 0, query_ty = SB_SQL_QUERY_RANGE_DISTINCT;
++       l < 1 || (args.use_secondary_index && l < 2);
++       ++l, query_ty = SB_SQL_QUERY_RANGE_DISTINCT_SI)
++  {
++    for(i = 0; i < n_distinct_ranges; i++)
++    {
++      query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
++      if (query == NULL)
++        goto memfail;
++      query->num_times = 1;
++      query->think_time = get_think_time();
++      query->type = query_ty;
++      range = GET_RANDOM_ID();
++      if (range + args.range_size > args.table_size)
++        range = args.table_size - args.range_size;
++      if (range < 1)
++        range = 1;     
++      query->u.range_query.from = range;
++      query->u.range_query.to = range + args.range_size;
++      query->nrows = 0;
++      SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
++    }
+   }
+ 
+   /* Skip all write queries for read-only test mode */
+@@ -961,6 +1040,7 @@
+   query->u.update_query.id = range;
+   SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
+   
++
+   /* Generate delete */
+   query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
+   if (query == NULL)
+@@ -982,6 +1062,28 @@
+   query->u.insert_query.id = range;
+   SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
+ 
++  /* Generate delete by secondary index */
++  query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
++  if (query == NULL)
++    goto memfail;
++  query->num_times = 1;
++  query->think_time = get_think_time();
++  query->type = SB_SQL_QUERY_DELETE_SI;
++  range = GET_RANDOM_ID();
++  query->u.delete_query.id = range;
++  SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
++
++  /* Generate insert with same value */
++  query = (sb_sql_query_t *)malloc(sizeof(sb_sql_query_t));
++  if (query == NULL)
++    goto memfail;
++  query->num_times = 1;
++  query->think_time = get_think_time();
++  query->type = SB_SQL_QUERY_INSERT;
++  query->u.insert_query.id = range;
++  SB_LIST_ADD_TAIL(&query->listitem, sql_req->queries);
++
++  
+  readonly:
+   
+   if (!args.skip_trx)
+@@ -1209,15 +1311,21 @@
+       /* count operation statistics */
+       switch(query->type) {
+         case SB_SQL_QUERY_POINT:
++        case SB_SQL_QUERY_POINT_SI:
+         case SB_SQL_QUERY_RANGE:
++        case SB_SQL_QUERY_RANGE_SI:
+         case SB_SQL_QUERY_RANGE_SUM:
++        case SB_SQL_QUERY_RANGE_SUM_SI:
+         case SB_SQL_QUERY_RANGE_ORDER:
++        case SB_SQL_QUERY_RANGE_ORDER_SI:
+         case SB_SQL_QUERY_RANGE_DISTINCT:
++        case SB_SQL_QUERY_RANGE_DISTINCT_SI:
+           local_read_ops += query->num_times;
+           break;
+         case SB_SQL_QUERY_UPDATE_INDEX:
+         case SB_SQL_QUERY_UPDATE_NON_INDEX:
+         case SB_SQL_QUERY_DELETE:
++        case SB_SQL_QUERY_DELETE_SI:
+         case SB_SQL_QUERY_INSERT:
+           local_write_ops += query->num_times;
+           break;
+@@ -1370,6 +1478,7 @@
+   }
+ 
+   args.read_only = sb_get_value_flag("oltp-read-only");
++  args.use_secondary_index = sb_get_value_flag("oltp-secondary-index");
+   args.skip_trx = sb_get_value_flag("oltp-skip-trx");
+   args.auto_inc = sb_get_value_flag("oltp-auto-inc");
+   args.range_size = sb_get_value_int("oltp-range-size");
+@@ -1464,14 +1573,20 @@
+   db_close(set->lock);
+   db_close(set->unlock);
+   db_close(set->point);
++  db_close(set->point_si);
+   db_close(set->call);
+   db_close(set->range);
++  db_close(set->range_si);
+   db_close(set->range_sum);
++  db_close(set->range_sum_si);
+   db_close(set->range_order);
++  db_close(set->range_order_si);
+   db_close(set->range_distinct);
++  db_close(set->range_distinct_si);
+   db_close(set->update_index);
+   db_close(set->update_non_index);
+   db_close(set->delete);
++  db_close(set->delete_si);
+   db_close(set->insert);
+ }
+ 
+@@ -1525,7 +1640,7 @@
+   db_bind_t binds[11];
+   char      query[MAX_QUERY_LEN];
+ 
+-  /* Prepare the point statement */
++  /* Prepare the point statements */
+   snprintf(query, MAX_QUERY_LEN, "SELECT c from %s where id=?",
+            args.table_name);
+   set->point = db_prepare(conn, query);
+@@ -1536,6 +1651,19 @@
+   binds[0].is_null = 0;
+   binds[0].data_len = 0;
+   if (db_bind_param(set->point, binds, 1))
++    return 1;
++
++  /* Prepare the secondary index point statement */
++  snprintf(query, MAX_QUERY_LEN, "SELECT c from %s where k=?",
++           args.table_name);
++  set->point_si = db_prepare(conn, query);
++  if (set->point_si == NULL)
++    return 1;
++  binds[0].type = DB_TYPE_INT;
++  binds[0].buffer = &bufs->point_si.id;
++  binds[0].is_null = 0;
++  binds[0].data_len = 0;
++  if (db_bind_param(set->point_si, binds, 1))
+     return 1;
+ 
+   /* Prepare the range statement */
+@@ -1555,6 +1683,23 @@
+   if (db_bind_param(set->range, binds, 2))
+     return 1;
+ 
++  /* Prepare the secondary index range statement */
++  snprintf(query, MAX_QUERY_LEN, "SELECT c from %s where k between ? and ?",
++           args.table_name);
++  set->range_si = db_prepare(conn, query);
++  if (set->range_si == NULL)
++    return 1;
++  binds[0].type = DB_TYPE_INT;
++  binds[0].buffer = &bufs->range_si.from;
++  binds[0].is_null = 0;
++  binds[0].data_len = 0;
++  binds[1].type = DB_TYPE_INT;
++  binds[1].buffer = &bufs->range_si.to;
++  binds[1].is_null = 0;
++  binds[1].data_len = 0;
++  if (db_bind_param(set->range_si, binds, 2))
++    return 1;
++
+   /* Prepare the range_sum statement */
+   snprintf(query, MAX_QUERY_LEN,
+            "SELECT SUM(K) from %s where id between ? and ?", args.table_name);
+@@ -1572,6 +1717,23 @@
+   if (db_bind_param(set->range_sum, binds, 2))
+     return 1;
+ 
++  /* Prepare the secondary index range_sum statement */
++  snprintf(query, MAX_QUERY_LEN,
++           "SELECT SUM(K) from %s where k between ? and ?", args.table_name);
++  set->range_sum_si = db_prepare(conn, query);
++  if (set->range_sum_si == NULL)
++    return 1;
++  binds[0].type = DB_TYPE_INT;
++  binds[0].buffer = &bufs->range_sum_si.from;
++  binds[0].is_null = 0;
++  binds[0].data_len = 0;
++  binds[1].type = DB_TYPE_INT;
++  binds[1].buffer = &bufs->range_sum_si.to;
++  binds[1].is_null = 0;
++  binds[1].data_len = 0;
++  if (db_bind_param(set->range_sum_si, binds, 2))
++    return 1;
++
+   /* Prepare the range_order statement */
+   snprintf(query, MAX_QUERY_LEN,
+            "SELECT c from %s where id between ? and ? order by c",
+@@ -1590,6 +1752,24 @@
+   if (db_bind_param(set->range_order, binds, 2))
+     return 1;
+ 
++  /* Prepare the secondary index range_order statement */
++  snprintf(query, MAX_QUERY_LEN,
++           "SELECT c from %s where k between ? and ? order by c",
++           args.table_name);
++  set->range_order_si = db_prepare(conn, query);
++  if (set->range_order_si == NULL)
++    return 1;
++  binds[0].type = DB_TYPE_INT;
++  binds[0].buffer = &bufs->range_order_si.from;
++  binds[0].is_null = 0;
++  binds[0].data_len = 0;
++  binds[1].type = DB_TYPE_INT;
++  binds[1].buffer = &bufs->range_order_si.to;
++  binds[1].is_null = 0;
++  binds[1].data_len = 0;
++  if (db_bind_param(set->range_order_si, binds, 2))
++    return 1;
++
+   /* Prepare the range_distinct statement */
+   snprintf(query, MAX_QUERY_LEN,
+            "SELECT DISTINCT c from %s where id between ? and ? order by c",
+@@ -1608,8 +1788,40 @@
+   if (db_bind_param(set->range_distinct, binds, 2))
+     return 1;
+ 
++  /* Prepare the secondary index range_distinct statement */
++  snprintf(query, MAX_QUERY_LEN,
++           "SELECT DISTINCT c from %s where k between ? and ? order by c",
++           args.table_name);
++  set->range_distinct_si = db_prepare(conn, query);
++  if (set->range_distinct_si == NULL)
++    return 1;
++  binds[0].type = DB_TYPE_INT;
++  binds[0].buffer = &bufs->range_distinct_si.from;
++  binds[0].is_null = 0;
++  binds[0].data_len = 0;
++  binds[1].type = DB_TYPE_INT;
++  binds[1].buffer = &bufs->range_distinct_si.to;
++  binds[1].is_null = 0;
++  binds[1].data_len = 0;
++  if (db_bind_param(set->range_distinct_si, binds, 2))
++    return 1;
++
+   /* Prepare the update_index statement */
+   snprintf(query, MAX_QUERY_LEN, "UPDATE %s set k=k+1 where id=?",
++           args.table_name);
++  set->update_index = db_prepare(conn, query);
++  if (set->update_index == NULL)
++    return 1;
++  binds[0].type = DB_TYPE_INT;
++  binds[0].buffer = &bufs->update_index.id;
++  binds[0].is_null = 0;
++  binds[0].data_len = 0;
++  if (db_bind_param(set->update_index, binds, 1))
++    return 1;
++
++  /* Prepare the secondary index update_index statement */
++  snprintf(query, MAX_QUERY_LEN,
++           "UPDATE %s set o=o+1 where id=?",
+            args.table_name);
+   set->update_index = db_prepare(conn, query);
+   if (set->update_index == NULL)
+@@ -1646,18 +1858,31 @@
+   if (db_bind_param(set->delete, binds, 1))
+     return 1;
+ 
++  /* Prepare the delete by secondary statement */
++  snprintf(query, MAX_QUERY_LEN, "DELETE from %s where k=?",
++           args.table_name);
++  set->delete_si = db_prepare(conn, query);
++  if (set->delete_si == NULL)
++    return 1;
++  binds[0].type = DB_TYPE_INT;
++  binds[0].buffer = &bufs->delete_si.id;
++  binds[0].is_null = 0;
++  binds[0].data_len = 0;
++  if (db_bind_param(set->delete_si, binds, 1))
++    return 1;
++
+   /* Prepare the insert statement */
+-  snprintf(query, MAX_QUERY_LEN, "INSERT INTO %s values(?,0,' ',"
++  snprintf(query, MAX_QUERY_LEN, "INSERT INTO %s values(?,?,?,' ',"
+            "'aaaaaaaaaaffffffffffrrrrrrrrrreeeeeeeeeeyyyyyyyyyy')",
+            args.table_name);
+   set->insert = db_prepare(conn, query);
+   if (set->insert == NULL)
+     return 1;
+-  binds[0].type = DB_TYPE_INT;
+-  binds[0].buffer = &bufs->insert.id;
+-  binds[0].is_null = 0;
+-  binds[0].data_len = 0;
+-  if (db_bind_param(set->insert, binds, 1))
++  binds[0].type     = binds[1].type     = binds[2].type     = DB_TYPE_INT;
++  binds[0].buffer   = binds[1].buffer   = binds[2].buffer   = &bufs->insert.id;
++  binds[0].is_null  = binds[1].is_null  = binds[2].is_null  = 0;
++  binds[0].data_len = binds[1].data_len = binds[2].data_len = 0;
++  if (db_bind_param(set->insert, binds, 3))
+     return 1;
+ 
+   if (args.skip_trx)
+@@ -1803,28 +2028,57 @@
+       buf->point.id = query->u.point_query.id;
+       break;
+ 
++    case SB_SQL_QUERY_POINT_SI:
++      stmt = statements[thread_id].point_si;
++      buf->point_si.id = query->u.point_query.id;
++      break;
++
+     case SB_SQL_QUERY_RANGE:
+       stmt = statements[thread_id].range;
+       buf->range.from = query->u.range_query.from;
+       buf->range.to = query->u.range_query.to;
+       break;
+ 
++    case SB_SQL_QUERY_RANGE_SI:
++      stmt = statements[thread_id].range_si;
++      buf->range_si.from = query->u.range_query.from;
++      buf->range_si.to = query->u.range_query.to;
++      break;
++
+     case SB_SQL_QUERY_RANGE_SUM:
+       stmt = statements[thread_id].range_sum;
+       buf->range_sum.from = query->u.range_query.from;
+       buf->range_sum.to = query->u.range_query.to;
+       break;
+ 
++    case SB_SQL_QUERY_RANGE_SUM_SI:
++      stmt = statements[thread_id].range_sum_si;
++      buf->range_sum_si.from = query->u.range_query.from;
++      buf->range_sum_si.to = query->u.range_query.to;
++      break;
++
+     case SB_SQL_QUERY_RANGE_ORDER:
+       stmt = statements[thread_id].range_order;
+       buf->range_order.from = query->u.range_query.from;
+       buf->range_order.to = query->u.range_query.to;
+       break;
+ 
++    case SB_SQL_QUERY_RANGE_ORDER_SI:
++      stmt = statements[thread_id].range_order_si;
++      buf->range_order_si.from = query->u.range_query.from;
++      buf->range_order_si.to = query->u.range_query.to;
++      break;
++
+     case SB_SQL_QUERY_RANGE_DISTINCT:
+       stmt = statements[thread_id].range_distinct;
+       buf->range_distinct.from = query->u.range_query.from;
+       buf->range_distinct.to = query->u.range_query.to;
++      break;
++
++    case SB_SQL_QUERY_RANGE_DISTINCT_SI:
++      stmt = statements[thread_id].range_distinct_si;
++      buf->range_distinct_si.from = query->u.range_query.from;
++      buf->range_distinct_si.to = query->u.range_query.to;
+       break;
+ 
+     case SB_SQL_QUERY_UPDATE_INDEX:
+@@ -1861,6 +2115,11 @@
+       buf->delete.id = query->u.delete_query.id;
+       break;
+ 
++    case SB_SQL_QUERY_DELETE_SI:
++      stmt = statements[thread_id].delete_si;
++      buf->delete_si.id = query->u.delete_query.id;
++      break;
++
+     case SB_SQL_QUERY_INSERT:
+       stmt = statements[thread_id].insert;
+       buf->insert.id = query->u.insert_query.id;
+--- orig/sysbench/tests/sb_oltp.h	2009-02-26 15:01:17.000000000 -0800
++++ new/sysbench/tests/sb_oltp.h	2009-01-28 12:50:00.000000000 -0800
+@@ -22,20 +22,29 @@
+ 
+ /* SQL query types definiton */
+ 
++/* The _SI suffix indicates that the query uses the secondary index on
++   sbtest.k rather than the PK on sbtest.id. Values from QUERY_POINT to
++   RANGE_DISTINCT imply this is a select statement. */
+ typedef enum
+   {
+   SB_SQL_QUERY_NULL,
+   SB_SQL_QUERY_LOCK,
+   SB_SQL_QUERY_UNLOCK,
+   SB_SQL_QUERY_POINT,
++  SB_SQL_QUERY_POINT_SI,
+   SB_SQL_QUERY_CALL,
+   SB_SQL_QUERY_RANGE,
++  SB_SQL_QUERY_RANGE_SI,
+   SB_SQL_QUERY_RANGE_SUM,
++  SB_SQL_QUERY_RANGE_SUM_SI,
+   SB_SQL_QUERY_RANGE_ORDER,
++  SB_SQL_QUERY_RANGE_ORDER_SI,
++  SB_SQL_QUERY_RANGE_DISTINCT_SI,
+   SB_SQL_QUERY_RANGE_DISTINCT,
+   SB_SQL_QUERY_UPDATE_INDEX,
+   SB_SQL_QUERY_UPDATE_NON_INDEX,
+   SB_SQL_QUERY_DELETE,
++  SB_SQL_QUERY_DELETE_SI,
+   SB_SQL_QUERY_INSERT
+ } sb_sql_query_type_t;
+ 
