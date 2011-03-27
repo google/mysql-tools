@@ -19,8 +19,10 @@
 Usage:
   sql.py <dbspec>
 
-Example dbspec:
+Example dbspecs:
   localhost:root::test
+  dbhost:root:pfile=.passwordfile:dbname:12345  # port number
+  socket=/var/lib/mysql.sock:root:pfile=/dev/null:dbname
 
 This extends SQL syntax by adding support for:
   -- Output as comma-separated values.
