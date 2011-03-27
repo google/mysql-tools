@@ -1,0 +1,28 @@
+A system for storing and distributing MySQL permissions.
+
+Permissions are stored in Python format using a set of permissions definition
+tools (define.py). They are parsed and expanded into permissions table SQL
+by use.py. This expansion step is complex, because the definition step allows
+negative permissions (grant SELECT on this database, but not on this table
+within it), which MySQL doesn't support natively.
+
+Once converted to SQL, permissions may then be pushed to the database. The
+push process interacts directly with the mysql permissions tables, then calls
+FLUSH PRIVILEGES. It does not use GRANT/REVOKE.
+
+In addition to direct push support, the system supports permissions
+distribution to alternate tables in an admin database, which are modified
+copies of the mysql tables. See permissions.sql for SQL to create these
+tables. This allows multiple permissions sets to be stored in the database.
+For example, the table could contain primary and replica permissions sets.
+Both sets are published to the primary, and some tool then copies them from
+the admin tables to the mysql tables on each MySQL server, using use.py:Copy().
+
+permissions file -----push----> mysql tables
+                 \               ^^ copy ^^
+                  +--publish--> admin tables
+
+WARNING: These tools make it much easier to break permissions on all of your
+MySQL instances at once. They will happily copy out bad permissions, or no
+permissions. Proper use of push_duration may mitigate this, but take care to
+implement appropriate safety checks for your environment.
