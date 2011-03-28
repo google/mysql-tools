@@ -38,6 +38,7 @@ import re
 import readline
 import sys
 
+from pylib import app
 from pylib import db
 
 
@@ -69,6 +70,9 @@ def Execute(dbh, query):
 
 
 def main(argv):
+  if len(argv) < 2:
+    raise app.UsageError('Please specify a dbspec')
+
   dbh = db.Connect(argv[1])
 
   try:
@@ -107,4 +111,4 @@ def main(argv):
       return 0
 
 if __name__ == '__main__':
-  main(sys.argv)
+  app.run()
