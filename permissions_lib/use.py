@@ -138,6 +138,10 @@ class PermissionsFile(object):
   def __init__(self, permissions_contents):
     """Load the permissions definitions.
 
+    TODO(flamingcow): There is a race when instantiating two instances of
+    PermissionsFile at once. We need a better way to return values from
+    define.py than a global.
+
     Args:
       permissions_contents: string containing Python code that defines
         permissions, using the framework provided in define.py.
@@ -145,10 +149,10 @@ class PermissionsFile(object):
     self.globals = define.__dict__
     # Reset define's global state. This makes multiple instantiations of
     # PermissionsFile work.
-    self.globals['SETS'] = {}
+    self.globals['SETS'].clear()
     code = compile(permissions_contents, 'permissions contents', 'exec')
     exec(code, self.globals)
-    self._sets = self.globals['SETS']
+    self._sets = self.globals['SETS'].copy()
 
   @staticmethod
   def GetAccountTables(dbh, account):
