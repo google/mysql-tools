@@ -616,7 +616,7 @@ class QueryConsumer(threading.Thread):
     self._execute_on_connect = kwargs.pop('execute_on_connect', [])
     self._stream_results = kwargs.pop('stream_results', False)
     self._fatal_errors = kwargs.pop('fatal_errors',
-                                    [1142, 1143, 1148, 2003, 2006, 2013])
+                                    [1142, 1143, 1148, 2003, 2006, 2013, 2014])
     self._dbargs = kwargs
     self._dbh = None
     self._queue = Queue.Queue(0)
