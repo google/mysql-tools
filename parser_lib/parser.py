@@ -24,6 +24,7 @@ is far from complete, and focuses on DDL.
 GoogleSQLParser adds ON SHARD support to the grammar.
 """
 
+# based on the work of Matthieu Tourne (matthieu.tourne@gmail.com)
 __author__ = 'flamingcow@google.com (Ian Gulliver)'
 
 import logging
@@ -899,9 +900,9 @@ class GoogleSQLParser(SQLParser):
   """Extended grammar for SQL within Google"""
 
   _GOOGLE_SQL_ON_SHARD = (
-      pyp.CaselessKeyword('on').suppress()
-      + pyp.CaselessKeyword('shard').suppress()
-      + pyp.delimitedList(SQLParser._NUMBER).setResultsName('shard'))
+      pyp.CaselessKeyword('on')
+      + pyp.CaselessKeyword('shard')
+      + pyp.Group(pyp.delimitedList(SQLParser._NUMBER)).setResultsName('shard'))
 
   _GOOGLE_SQL_EXTENSION = pyp.Group(_GOOGLE_SQL_ON_SHARD
                                     ).setResultsName('running_scheme')
