@@ -79,6 +79,7 @@ class SQLParser(object):
 
   _COMMENT_START = pyp.Literal('--').suppress()
   _COMMENT_LINE = _COMMENT_START + pyp.restOfLine
+  _COMMENT_BLOCK = pyp.Regex(r'/\*(?=[^!])(?:[^*]*\*+)+?/')
 
   # TERMINALS
 
@@ -144,6 +145,7 @@ class SQLParser(object):
   _EXISTS_TOKEN = pyp.CaselessKeyword('exists').suppress()
   _CHARSET_TOKEN = pyp.CaselessKeyword('charset')
   _CHARACTER_TOKEN = pyp.CaselessKeyword('character')
+  _NAMES_TOKEN = pyp.CaselessKeyword('names')
   _COLLATE_TOKEN = pyp.CaselessKeyword('collate')
   _INTERVAL_TOKEN = pyp.CaselessKeyword('interval')
 
@@ -210,6 +212,10 @@ class SQLParser(object):
   _TRANSACTION_TOKEN = pyp.CaselessKeyword('transaction')
   _COMMIT_TOKEN = pyp.CaselessKeyword('commit')
   _ROLLBACK_TOKEN = pyp.CaselessKeyword('rollback')
+
+  _LOCAL_TOKEN = pyp.CaselessKeyword('local')
+  _SESSION_TOKEN = pyp.CaselessKeyword('session')
+  _GLOBAL_TOKEN = pyp.CaselessKeyword('global')
 
   ## IDENTIFIER
 
@@ -598,8 +604,11 @@ class SQLParser(object):
       + _ARG_LIST
       ).setResultsName('function')
 
-  _VARIABLE = (pyp.Suppress('@') + _IDENTIFIER
-               ).setResultsName('variable')
+  _VARIABLE = pyp.Group(
+      pyp.Group(pyp.Literal('@@')
+                | pyp.Literal('@')
+                ).setResultsName('scope')
+      + _IDENTIFIER.setResultsName('variable'))
 
   _LVAL = ((pyp.Suppress('(') + _EXPRESSION + pyp.Suppress(')'))
            | _VAL
@@ -670,6 +679,35 @@ class SQLParser(object):
   _EXPRESSION << (
       pyp.Group(_EXPRESSION5
                 + pyp.ZeroOrMore(_BINOP6 + _EXPRESSION5)).setResultsName('ex'))
+
+  # SET STATEMENT
+
+  _SET_VARIABLE = (
+      pyp.Optional(
+          _LOCAL_TOKEN
+          | _SESSION_TOKEN
+          | _GLOBAL_TOKEN
+          | pyp.Literal('@@')
+          | pyp.Literal('@')
+          ).setResultsName('scope')
+      + _IDENTIFIER.setResultsName('variable')
+      + pyp.Literal('=')
+      + _EXPRESSION)
+
+  _SET_CHARSET = (
+      _CHARACTER_TOKEN
+      + _SET_TOKEN
+      + _EXPRESSION)
+
+  _SET_NAMES = (
+      _NAMES_TOKEN
+      + _EXPRESSION)
+
+  _SET_SQL = pyp.Group(
+      _SET_TOKEN
+      + pyp.delimitedList(_SET_VARIABLE
+                          | _SET_CHARSET
+                          | _SET_NAMES))
 
   # TABLE REFERENCE
 
@@ -870,20 +908,29 @@ class SQLParser(object):
   _TRUNCATE_SQL = (pyp.CaselessKeyword('truncate')
                    + pyp.SkipTo(_LINE_DELIMITER).suppress())
 
+  # VERSIONED COMMENTS
+  _STATEMENT = pyp.Forward()
+  _VERSIONED_COMMENT = (pyp.Literal('/*!')
+                        + pyp.Optional(_NUMBER.setResultsName('min_version'))
+                        + _STATEMENT
+                        + pyp.Literal('*/'))
+
   # MAIN
 
-  _STATEMENT = pyp.Group(_ALTER_TABLE_SQL | _CREATE_TABLE_SQL
-                         | _DROP_TABLE_SQL | _RENAME_TABLE_SQL
-                         | _SELECT_SQL | _UPDATE_SQL | _INSERT_SQL
-                         | _REPLACE_SQL
-                         | _DELETE_SIMPLE_SQL
-                         | _DELETE_MULTI_SQL
-                         | _TRUNCATE_SQL
-                         | _START_TRANSACTION_SQL
-                         | _END_TRANSACTION_SQL
-                         | _CREATE_DATABASE_SQL
-                         | _CREATE_INDEX_SQL
-                         ).setResultsName('statement')
+  _STATEMENT << pyp.Group(_ALTER_TABLE_SQL | _CREATE_TABLE_SQL
+                          | _DROP_TABLE_SQL | _RENAME_TABLE_SQL
+                          | _SELECT_SQL | _UPDATE_SQL | _INSERT_SQL
+                          | _REPLACE_SQL
+                          | _DELETE_SIMPLE_SQL
+                          | _DELETE_MULTI_SQL
+                          | _TRUNCATE_SQL
+                          | _START_TRANSACTION_SQL
+                          | _END_TRANSACTION_SQL
+                          | _CREATE_DATABASE_SQL
+                          | _CREATE_INDEX_SQL
+                          | _SET_SQL
+                          | _VERSIONED_COMMENT
+                          ).setResultsName('statement')
 
   _QUERY = pyp.Group(_STATEMENT
                      + _LINE_DELIMITER).setResultsName('query')
@@ -893,7 +940,7 @@ class SQLParser(object):
                     ).setResultsName('queries')
 
   _SQL.ignore(_COMMENT_LINE)    # don't parse comments
-  _SQL.ignore(pyp.cStyleComment)
+  _SQL.ignore(_COMMENT_BLOCK)
 
 
 class GoogleSQLParser(SQLParser):
@@ -916,4 +963,4 @@ class GoogleSQLParser(SQLParser):
                    ).setResultsName('queries')
 
   _SQL.ignore(SQLParser._COMMENT_LINE)    # don't parse comments
-  _SQL.ignore(pyp.cStyleComment)
+  _SQL.ignore(SQLParser._COMMENT_BLOCK)
