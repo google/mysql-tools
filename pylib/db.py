@@ -53,12 +53,9 @@ import threading
 import time
 import traceback
 
-# VirtualTable and Spec parsing are available without MySQLdb imported. Code
-# inheriting from this library may also define additional dbtypes.
-try:
-  import MySQLdb
-except ImportError:
-  pass
+import thread_tools
+
+import MySQLdb
 
 
 class Error(Exception):
@@ -370,38 +367,12 @@ class QueryWarnings(VirtualTable):
   _contents = 'Warnings'
 
 
-class Notification(object):
-  """Allow multiple threads to wait for an occurrence of an event.
-
-  All threads block on WaitForNotification() until one thread calls Notify(),
-  after which all other calls unblock.
-  """
-
-  def __init__(self):
-    self._lock = threading.Lock()
-    self._lock.acquire()
-
-  def Notify(self):
-    self._lock.release()
-
-  def WaitForNotification(self):
-    self._lock.acquire()
-    self._lock.release()
-
-  def HasBeenNotified(self):
-    if self._lock.acquire(False):
-      self._lock.release()
-      return True
-    else:
-      return False
-
-
 class Operation(object):
   """An operation that can block between threads."""
 
   def __init__(self, args):
     self._args = args
-    self._notification = Notification()
+    self._notification = thread_tools.Notification()
     self._result = None
     self._canceled = False
 
