@@ -27,8 +27,8 @@ Later maintainer: Mikey Dickerson
 import logging
 import time
 
-import drift_lib
-import imitate_droid_connection
+from drift import drift_lib
+from drift import imitate_droid_connection
 from pylib import app
 from pylib import flags
 
@@ -76,10 +76,10 @@ def DictFromFlags():
   Returns:
     Dictionary mapping flag keys to flag values.
   """
-  flag_dict = FLAGS.FlagDict()
+  flag_dict = vars(FLAGS)
   new_dict = {}
   for k, v in flag_dict.iteritems():
-    new_dict[k] = v.value
+    new_dict[k] = v
   return new_dict
 
 
@@ -89,8 +89,6 @@ def main(unused_argv):
   This function sets up the parameters for a DbChecksummer, passing the FLAGS
   parameters in as the droid-compatible config dictionary.
   """
-
-  logging.set_googlestyle_logfile()
 
   if not FLAGS.db_host:
     logging.error('must provide --db_host (master) to run checksum queries on')

@@ -59,6 +59,18 @@ def DEFINE_integer(name, default, description, short_name=None):
   setattr(FLAGS, name, default)
 
 @RecordCall
+def DEFINE_float(name, default, description, short_name=None):
+  if default is not None and default != '':
+    description = "%s (default: %s)" % (description, default)
+  args = [ "--%s" % name ]
+  if short_name is not None:
+    args.insert(0, "-%s" % short_name)
+
+  parser.add_option(type="float", help=description, *args)
+  parser.set_default(name, default)
+  setattr(FLAGS, name, default)
+
+@RecordCall
 def DEFINE_boolean(name, default, description, short_name=None):
   if default is not None and default != '':
     description = "%s (default: %s)" % (description, default)

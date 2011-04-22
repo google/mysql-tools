@@ -101,6 +101,7 @@ class ImitateDroidConnection(object):
                                    user=self._db_user,
                                    passwd=self._db_password,
                                    db=self._db_name)
+      self._db.autocommit(True)
       self._cursor = self._db.cursor(MySQLdb.cursors.Cursor)
       logging.info('Connected to MySQL')
     except MySQLdb.Error, e:
