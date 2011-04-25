@@ -27,8 +27,8 @@ Later maintainer: Mikey Dickerson
 import logging
 import time
 
-from drift import drift_lib
-from drift import imitate_droid_connection
+from drift_lib import drift_lib
+from drift_lib import imitate_droid_connection
 from pylib import app
 from pylib import flags
 
