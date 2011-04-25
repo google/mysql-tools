@@ -1,0 +1,11 @@
+Library for detecting drift between the master and slaves in a running system.
+
+This code requires two features from the Google MySQL patch:
+ * ORDERED_CHECKSUM()
+ * LAST_VALUE()
+
+It does a ratelimited scan of a configured set of databases/tables, generating
+checkums from their data and writing them to a table (see checksums.sql). It
+then copies the checksum values generated on the master to a second "golden"
+table. The slave can then compare the values in the two tables; no discrepancies
+means no drift.
