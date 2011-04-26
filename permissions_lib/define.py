@@ -41,12 +41,16 @@ __author__ = 'flamingcow@google.com (Ian Gulliver)'
 __docformat__ = 'epytext en'
 
 import copy
-import hashlib
+import functools
 
 try:
   from ..pylib import db
+  from ..pylib import thread_tools
 except (ValueError, ImportError):
   from pylib import db
+  from pylib import thread_tools
+
+import utils
 
 
 SETS = {}
@@ -87,6 +91,14 @@ class NoSuchAccount(Error):
 
 class NoSuchSet(Error):
   """Raised when a permissions set is not found (by FindAccount)."""
+
+
+class DecryptionRequired(Error):
+  """Raised when an account that needs decryption is used."""
+
+
+class DecryptionFailed(Error):
+  """Raised when decryption fails, due to invalid key or data."""
 
 
 _TOTAL_PRIVS = 26
@@ -568,7 +580,7 @@ class Account(object):
   """
   @_KeywordArgumentsOnly
   def __init__(self, username=None, password_hash=None, password=None,
-               **kwargs):
+               encrypted_hash=None, **kwargs):
     """Creates a new account instance.
 
     An Account can represent an actual exported account and/or a template.  Note
@@ -585,6 +597,7 @@ class Account(object):
     self._comments = {}
     self._username = None
     self._password_hash = None
+    self._encrypted_hash = None
     # For each privilege set, we store positive and negative privilege bits.
     # Privileges are defined as (positive & ~negative).  More specific
     # privileges override less-specific ones.  As MySQL only supports positive
@@ -593,11 +606,13 @@ class Account(object):
     self._perm = _UserPermission(username)
     self.InitUser(username=username,
                   password_hash=password_hash,
-                  password=password)
+                  password=password,
+                  encrypted_hash=encrypted_hash)
     self.SetFields(**kwargs)
 
   @_KeywordArgumentsOnly
-  def InitUser(self, username=None, password_hash=None, password=None):
+  def InitUser(self, username=None, password_hash=None, password=None,
+               encrypted_hash=None):
     """Handle constructor or copy user/password initialization.
 
     Any argument may be None, meaning "do not change".
@@ -609,6 +624,8 @@ class Account(object):
           instead is strongly recommended, in which case this is ignored.
       password_hash: the double-SHA1 hash of this user's password, as returned
           by the MySQL (version 4.1 and higher) PASSWORD() command
+      encrypted_hash: the hash as above which was then encrypted with an RSA
+          public key and encoded into base64.
 
     Returns:
       self (allows method call chaining)
@@ -619,13 +636,15 @@ class Account(object):
     if password_hash is not None:
       self._password_hash = password_hash
     elif password is not None:
-      self._password_hash = (
-          '*' +
-          hashlib.sha1(hashlib.sha1(password).digest()).hexdigest().upper())
+      self._password_hash = utils.HashPassword(password)
+    elif encrypted_hash is not None:
+      self._password_hash = None  # Set by Decrypt()
+      self._encrypted_hash = encrypted_hash
     return self
 
   @_KeywordArgumentsOnly
-  def Clone(self, username=None, password_hash=None, password=None, **kwargs):
+  def Clone(self, username=None, password_hash=None, password=None,
+            encrypted_hash=None, **kwargs):
     """Clone an Account.
 
     The username or password may be changed here as well.
@@ -638,7 +657,8 @@ class Account(object):
     new = copy.deepcopy(self)
     new.InitUser(username=username,
                  password_hash=password_hash,
-                 password=password)
+                 password=password,
+                 encrypted_hash=encrypted_hash)
     new.SetFields(**kwargs)
     return new
 
@@ -834,12 +854,21 @@ class Account(object):
     Returns:
       self (allows method call chaining)
     """
-    if None in (self._username, self._password_hash):
+    if (self._username is None or (self._password_hash is None and
+                                   self._encrypted_hash is None)):
       raise MissingFieldsError(
-          'Username and password/password hash are required to Export a user')
+          'Username and password/password hash/encrypted hash are required to '
+          'Export a user')
     set_obj = SETS.setdefault(set_name, Set())
     set_obj.AddAccount(self)
     return self
+
+  def Decrypt(self, key):
+    """Decrypt an encrypted hash for this user, if there is one."""
+    if self._encrypted_hash is not None and self._password_hash is None:
+      self._password_hash = utils.DecryptHash(key, self._encrypted_hash)
+      if not self._password_hash:
+        raise DecryptionFailed(self.GetUsername())
 
   def GetUsername(self):
     """Return the username for this account.
@@ -873,7 +902,11 @@ class Account(object):
 
     Raises:
       NeedDBAccess
+      DecryptionRequired
     """
+    if self._encrypted_hash is not None and self._password_hash is None:
+      raise DecryptionRequired(self.GetUsername())
+
     self._perm.PullUpPrivileges()
     self._perm.PushDownPrivileges(query_callback)
     self._perm.PullUpPrivileges()
@@ -950,10 +983,12 @@ class Set(object):
     if 'username' in fields: del fields['username']
     if 'password' in fields: del fields['password']
     if 'password_hash' in fields: del fields['password_hash']
+    if 'encrypted_hash' in fields: del fields['encrypted_hash']
     for account in self._accounts.itervalues():
       account.InitUser(username=kwargs.get('username', None),
                        password=kwargs.get('password', None),
-                       password_hash=kwargs.get('password_hash', None))
+                       password_hash=kwargs.get('password_hash', None),
+                       encrypted_hash=kwargs.get('encrypted_hash', None))
       account.SetFields(**fields)
 
   def SetAllAllowedHosts(self, hostname_patterns):
@@ -970,6 +1005,21 @@ class Set(object):
     for account in self._accounts.itervalues():
       new_set.AddAccount(account)
     return new_set
+
+  def Decrypt(self, key, threads=1):
+    """Decrypt hashes for all accounts in this set."""
+    # TODO(flamingcow): tlslite has thread-safety issues for at least some
+    # provider libraries. Figure out how to fix this.
+    em = thread_tools.EventManager(threads)
+    callbacks = []
+    for account in self._accounts.itervalues():
+      inner_callback = functools.partial(account.Decrypt, key)
+      callback = thread_tools.BlockingCallback(inner_callback)
+      em.Add(callback)
+      callbacks.append(callback)
+    for callback in callbacks:
+      callback.Wait()
+    em.Shutdown()
 
 
 # For use by code defining permissions:

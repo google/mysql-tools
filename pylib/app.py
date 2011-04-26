@@ -21,6 +21,8 @@ def run():
   argv = flags.ParseArgs(sys.argv)
   try:
     sys.exit(sys.modules['__main__'].main(argv))
-  except UsageError:
+  except UsageError, e:
+    print e
+    print
     flags.ShowUsage()
     sys.exit(1)

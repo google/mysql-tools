@@ -1,5 +1,7 @@
 A system for storing and distributing MySQL permissions.
 
+Requires tlslite (http://trevp.net/tlslite/).
+
 Permissions are stored in Python format using a set of permissions definition
 tools (define.py). They are parsed and expanded into permissions table SQL
 by use.py. This expansion step is complex, because the definition step allows

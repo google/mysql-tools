@@ -29,6 +29,7 @@ __docformat__ = 'epytext en'
 import logging
 
 import define
+import utils
 
 
 class Error(Exception):
@@ -135,7 +136,7 @@ def MarkPermissionsChanged(dbh, set_id, push_duration=1800):
 class PermissionsFile(object):
   """Represent permissions definitions."""
 
-  def __init__(self, permissions_contents):
+  def __init__(self, permissions_contents, private_keyfile=None):
     """Load the permissions definitions.
 
     TODO(flamingcow): There is a race when instantiating two instances of
@@ -145,6 +146,8 @@ class PermissionsFile(object):
     Args:
       permissions_contents: string containing Python code that defines
         permissions, using the framework provided in define.py.
+      private_keyfile: Path to a file containing the private RSA key to be
+        used to decrypt encrypted_hash values from permissions_contents.
     """
     self.globals = define.__dict__
     # Reset define's global state. This makes multiple instantiations of
@@ -153,6 +156,10 @@ class PermissionsFile(object):
     code = compile(permissions_contents, 'permissions contents', 'exec')
     exec(code, self.globals)
     self._sets = self.globals['SETS'].copy()
+    if private_keyfile:
+      self._decryption_key = utils.PrivateKeyFromFile(private_keyfile)
+    else:
+      self._decryption_key = None
 
   @staticmethod
   def GetAccountTables(dbh, account):
@@ -169,6 +176,8 @@ class PermissionsFile(object):
       callback = dbh.CachedExecuteOrDie
     else:
       callback = None
+    if self._decryption_key:
+      self._sets[set_name].Decrypt(self._decryption_key)
     return self._sets[set_name].GetTables(callback)
 
   @staticmethod
@@ -206,11 +215,11 @@ class PermissionsFile(object):
       dbh.ExecuteOrDie('ROLLBACK;')
       raise ValidationFailure('Operation resulted in blank user list')
 
-  def PrintSets(self, unused_dbh):
+  def PrintSets(self):
     """Print the set names available in this PermissionsFile."""
-    print '\n'.join(sorted(self.ListSets(unused_dbh)))
+    print '\n'.join(sorted(self.ListSets()))
 
-  def ListSets(self, unused_dbh):
+  def ListSets(self):
     """Return the set names available in this PermissionsFile."""
     return self._sets.keys()
 
@@ -250,7 +259,7 @@ class PermissionsFile(object):
       'user':         'admin.MysqlPermissionsUser',
       }
 
-  def Publish(self, dbh, set_name, dest_set_name, push_duration):
+  def Publish(self, dbh, set_name, dest_set_name, push_duration=1800):
     """Publish the permissions defined by set_name to the database.
 
     This "publishes" the permissions to the the database.  The permissions are

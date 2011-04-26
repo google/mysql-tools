@@ -16,8 +16,7 @@
 
 """Utility to push and publish permissions.
 
-  permissions.py [flags] FILENAME COMMAND [ARG]...
-  permissions.py [flags] copy DB_SET
+  permissions.py [flags] COMMAND
 
 Note the --db=DBSPEC flag is required for copy/publish/push commands and may
 be required for push/test depending on your permissions configuration.
@@ -25,31 +24,43 @@ Examples:
   --db=dbhost#:::dbname#
   --db=dbhost#:otheruser::dbname#
 
-FILENAME contains permissions settings on which to operate. The file may
-contain one or more named sets of permissions.
+The --set and --file flags are required for some commands.
 
-Available commands:
-  copy SET_NAME
-    Copy the published permissions SET_NAME to DBSPEC.
-    This is the only command which is used without a FILENAME.
-  dump SET_NAME
-    Dump the SQL for the permissions SET_NAME from FILENAME.
+Hashing and encryption:
+  decrypt-hash
+    Prompt for an encrypted string and print its hash decrypted with
+    --private_keyfile.
+  encrypt-password
+    Prompt for a password and print its hash encrypted with --public_keyfile.
+  generate-key
+    Generate encryption keys and write them to --public_keyfile and
+    --private_keyfile.
+  hash-password
+    Prompt for a password and print its MySQL hash.
+
+Using a permissions file and admin permissions tables:
+  copy
+    Copy the published permissions --set to --db.
+  dump
+    Dump the SQL for the permissions --set from --file.
   list-sets
-    List the permissions set names defined in FILENAME.
-  publish SET_NAME
-    Publish the permissions set named by --source_set to DBSPEC as SET_NAME.
-  push SET_NAME
-    Push permissions set named by SET_NAME directly to DBSPEC.
+    List the permissions set names defined in --file.
+  publish
+    Publish the permissions set --source_set from --file to --db as --set.
+  push
+    Push permissions set --source_set from --file directly to --db.
   test
-    Test all permissions sets defined in FILENAME.
+    Test all permissions sets defined in --file.
 """
 
 __author__ = 'flamingcow@google.com (Ian Gulliver)'
 
+import inspect
 import sys
 
 from permissions_lib import define
 from permissions_lib import use
+from permissions_lib import utils
 from pylib import app
 from pylib import flags
 from pylib import db
@@ -57,55 +68,94 @@ from pylib import db
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string('db', None, 'DB spec to read from/push to')
-flags.DEFINE_integer('push_duration', 1800, 'Staggered push duration (seconds)')
+flags.DEFINE_integer('push_duration', None,
+                     'Staggered push duration (seconds)')
+flags.DEFINE_string('file', None,
+                    'File containing permissions settings on which to '
+                    'operate. The file may contain one or more named sets of '
+                    'permissions')
+flags.DEFINE_string('public_keyfile', None,
+                    'File to write/read public encryption key to/from')
+flags.DEFINE_string('private_keyfile', None,
+                    'File to write/read private encryption key to/from')
+flags.DEFINE_integer('key_bits', None,
+                     'Size (in bits) of new RSA key')
+flags.DEFINE_string('set', None,
+                    'Set name to publish to')
 flags.DEFINE_string('source_set', None,
                     'Set name to publish from; defaults to target set')
 
 
-_COMMANDS = {'dump':      'Dump',
-             'list-sets': 'PrintSets',
-             'push':      'Push',
-             'publish':   'Publish',
-             'test':      'Test'}
+_COMMANDS = {'decrypt-hash':     utils.DecryptHashInteractive,
+             'encrypt-password': utils.EncryptPasswordInteractive,
+             'generate-key':     utils.GenerateKey,
+             'hash-password':    utils.HashPasswordInteractive,
+             'copy':             use.Copy,
+             'dump':             use.PermissionsFile.Dump,
+             'list-sets':        use.PermissionsFile.PrintSets,
+             'push':             use.PermissionsFile.Push,
+             'publish':          use.PermissionsFile.Publish,
+             'test':             use.PermissionsFile.Test}
+
+
+def CheckArgs(func, args):
+  argset = set(args)
+  spec = inspect.getargspec(func)
+  if spec.defaults:
+    funcargs = set(spec.args[:-len(spec.defaults)])
+  else:
+    funcargs = set(spec.args)
+  missing = funcargs.difference(argset)
+  if missing:
+    raise app.UsageError('Missing arguments: %s' % ', '.join(missing))
+  for extra in argset.difference(funcargs):
+    del args[extra]
 
 
 def main(argv):
-  if len(argv) < 3:
-    raise app.UsageError('Not enough arguments')
+  if len(argv) != 2:
+    raise app.UsageError('Incorrect arguments')
+
+  args = {}
+
+  if FLAGS.private_keyfile:
+    args['private_keyfile'] = FLAGS.private_keyfile
+
+  if FLAGS.file:
+    args['self'] = use.PermissionsFile(open(FLAGS.file, 'r').read(),
+                                       private_keyfile=FLAGS.private_keyfile)
+    args.pop('private_keyfile', None)  # Not otherwise used
 
   if FLAGS.db:
-    dbh = db.Connect(FLAGS.db)
-  else:
-    dbh = None
+    args['dbh'] = db.Connect(FLAGS.db)
 
-  try:  # defer dbh.Close()
-    if argv[1] == 'copy':
-      use.Copy(dbh, argv[2])
-      return 0
+  if FLAGS.set:
+    args['dest_set_name'] = FLAGS.set
+    args['set_name'] = FLAGS.set
 
-    f = open(argv[1], 'r')
-    perms = use.PermissionsFile(f.read())
-    command = argv[2]
-    args = argv[3:]
+  if FLAGS.source_set:
+    args['set_name'] = FLAGS.source_set
 
-    if command == 'publish':
-      if not FLAGS.source_set:
-        FLAGS.source_set = args[0]
-      args = [FLAGS.source_set, args[0], FLAGS.push_duration]
+  if FLAGS.push_duration:
+    args['push_duration'] = FLAGS.push_duration
 
+  if FLAGS.public_keyfile:
+    args['public_keyfile'] = FLAGS.public_keyfile
+
+  CheckArgs(_COMMANDS[argv[1]], args)
+  try:
     try:
-      getattr(perms, _COMMANDS[command])(dbh, *args)
-    except db.Error, e:
-      # Lose the stack trace; it's not useful for DB errors
-      print e
-      return 1
-    except TypeError, e:
-      print e
-      return 2
-
+      obj = args.pop('self')
+      _COMMANDS[argv[1]](obj, **args)
+    except KeyError:
+      _COMMANDS[argv[1]](**args)
+  except db.Error, e:
+    # Lose the stack trace; it's not useful for DB errors
+    print e
+    return 1
   finally:
-    if dbh is not None:
-      dbh.Close()
+    if 'dbh' in args:
+      args['dbh'].Close()
 
 
 if __name__ == '__main__':
