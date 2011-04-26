@@ -549,9 +549,10 @@ class TouchChecker(Visitor):
   """Warn when a particular table/column is touched."""
 
   def __init__(self, *args, **kwargs):
-    self._tables = set(kwargs.pop('tables', []))
-    self._columns = set(x.lower() for x in kwargs.pop('columns', []))
-    self._values = set(kwargs.pop('values', []))
+    self._tables = set(kwargs.pop('tables', ()))
+    self._columns = set(x.lower() for x in kwargs.pop('columns', ()))
+    self._values = set(kwargs.pop('values', ()))
+    self._operations = set(kwargs.pop('operations', ()))
     self._msg = kwargs.pop('message')
     Visitor.__init__(self, *args, **kwargs)
 
@@ -578,9 +579,19 @@ class TouchChecker(Visitor):
         # No values in common
         return
 
+    operations = set()
+    if self._operations:
+      for operation in self._operations:
+        if self._GetDescendants(tokens, operation):
+          operations.add(operation)
+      if not operations:
+        # No such operations found
+        return
+
     msg = self._msg % {
         'tables': tables,
         'columns': columns,
         'values': values,
+        'operations': operations,
     }
     self.AddWarning(tokens, msg)

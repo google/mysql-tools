@@ -876,7 +876,7 @@ class SQLParser(object):
   _DELETE_SIMPLE_SQL = pyp.Group(_DELETE_TOKEN
                                  + _FROM_TOKEN
                                  + _TABLE_NAME
-                                 + _WHERE
+                                 + pyp.Optional(_WHERE)
                                  + pyp.Optional(_ORDER_BY)
                                  + pyp.Optional(_LIMIT)
                                  ).setResultsName('delete')
