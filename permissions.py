@@ -101,13 +101,16 @@ _COMMANDS = {'decrypt-hash':     utils.DecryptHashInteractive,
 def CheckArgs(func, args):
   argset = set(args)
   spec = inspect.getargspec(func)
+  funcargs = set(spec.args)
   if spec.defaults:
-    funcargs = set(spec.args[:-len(spec.defaults)])
+    requiredargs = set(spec.args[:-len(spec.defaults)])
   else:
-    funcargs = set(spec.args)
-  missing = funcargs.difference(argset)
+    requiredargs = set(spec.args)
+
+  missing = requiredargs.difference(argset)
   if missing:
     raise app.UsageError('Missing arguments: %s' % ', '.join(missing))
+
   for extra in argset.difference(funcargs):
     del args[extra]
 
