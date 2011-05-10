@@ -45,10 +45,8 @@ import functools
 
 try:
   from ..pylib import db
-  from ..pylib import thread_tools
 except (ValueError, ImportError):
   from pylib import db
-  from pylib import thread_tools
 
 import utils
 
@@ -265,16 +263,14 @@ class _BasePermission(object):
     """
     return self._children
 
-  def _CreateAllChildren(self, query_callback, fixed_values):
+  def _CreateAllChildren(self, dbh, fixed_values):
     """Find all possible children (talking to the database) and create them.
 
     Args:
-      query_callback: A function that takes a query string and returns a
-          VirtualTable instance
+      dbh: Database handle
       fixed_values: Dictionary of parent entity names
     """
-    possible_children = self._child_class.GetAllEntities(query_callback,
-                                                         fixed_values)
+    possible_children = self._child_class.GetAllEntities(dbh, fixed_values)
     for child_name in possible_children:
       self.GetOrCreateChild(child_name)
 
@@ -336,7 +332,7 @@ class _BasePermission(object):
     """Revoke privileges without setting negative permissions for them."""
     self._positive_privs &= ~privs
 
-  def PushDownPrivileges(self, query_callback=None, fixed_values={}):
+  def PushDownPrivileges(self, dbh=None, fixed_values={}):
     """Remove negative privileges by pushing down positive privs.
 
     Check for negative permissions from all descendants.  Push down any negative
@@ -353,13 +349,13 @@ class _BasePermission(object):
 
     push_down = descendant_negative_privs & self._positive_privs
     if push_down:
-      self._CreateAllChildren(query_callback, fixed_values)
+      self._CreateAllChildren(dbh, fixed_values)
       self.SoftRevokePrivileges(push_down)
       for child in self._children.itervalues():
         child.SoftGrantPrivileges(push_down)
 
     for child in self._children.values():
-      child.PushDownPrivileges(query_callback, fixed_values)
+      child.PushDownPrivileges(dbh, fixed_values)
 
   def PrivilegesForPullUp(self):
     """Get privileges that could be pulled up from this child."""
@@ -453,16 +449,17 @@ class _ColumnPermission(_BasePermission, _SetPrivsMixIn):
     table.Append(values)
 
   @staticmethod
-  def GetAllEntities(query_callback, fixed_values={}):
-    if not query_callback:
+  def GetAllEntities(dbh, fixed_values={}):
+    if not dbh:
       raise NeedDBAccess('Need to retrieve column list from %s.%s' %
                          (str(fixed_values['Db']), fixed_values['Table_name']))
     if fixed_values['Db'] == DEFAULT:
-      result = query_callback('SHOW FIELDS FROM `%s`' %
-                              fixed_values['Table_name'])
+      result = dbh.CachedExecuteOrDie('SHOW FIELDS FROM `%s`' %
+                                      fixed_values['Table_name'])
     else:
-      result = query_callback('SHOW FIELDS FROM `%s`.`%s`' %
-                              (fixed_values['Db'], fixed_values['Table_name']))
+      result = dbh.CachedExecuteOrDie('SHOW FIELDS FROM `%s`.`%s`' %
+                                      (fixed_values['Db'],
+                                       fixed_values['Table_name']))
     return [row['Field'] for row in result]
 
 
@@ -507,15 +504,15 @@ class _TablePermission(_BasePermission, _SetPrivsMixIn):
     table.Append(values)
 
   @staticmethod
-  def GetAllEntities(query_callback, fixed_values={}):
-    if not query_callback:
+  def GetAllEntities(dbh, fixed_values={}):
+    if not dbh:
       raise NeedDBAccess('Need to retrieve table list from %s' %
                          str(fixed_values['Db']))
     if fixed_values['Db'] == DEFAULT:
       dbname = 'DATABASE()'
     else:
       dbname = "'%s'" % fixed_values['Db'].replace("'", "''")
-    result = query_callback(
+    result = dbh.CachedExecuteOrDie(
         'SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE'
         ' TABLE_SCHEMA=%s' % dbname)
     return [row['TABLE_NAME'] for row in result]
@@ -532,10 +529,10 @@ class _DatabasePermission(_BasePermission, _ColumnPrivsMixIn):
   _entity_field = 'Db'
 
   @staticmethod
-  def GetAllEntities(query_callback, fixed_values={}):
-    if not query_callback:
+  def GetAllEntities(dbh, fixed_values={}):
+    if not dbh:
       raise NeedDBAccess('Need to retrieve database list')
-    result = query_callback(
+    result = dbh.CachedExecuteOrDie(
         'SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE'
         ' SCHEMA_NAME != DATABASE()')
     return [row['SCHEMA_NAME'] for row in result] + [DEFAULT]
@@ -885,16 +882,15 @@ class Account(object):
     """Fetch the UserPermission object behind this account."""
     return self._perm
 
-  def GetTables(self, query_callback=None):
+  def GetTables(self, dbh=None):
     """Generate tables containing privilege data for this user.
 
     This method is used during push/publish/dump operations and calls to it
     should not appear in a permissions file.
 
     Args:
-      query_callback: A function to call that takes a SQL query and returns the
-        results from fetchall().  Only used for read-only, schema-description
-        queries here.
+      dbh: Database handle. Only used here for read-only, schema-description
+        queries.
 
     Returns:
       A dictionary where the keys are a table name in the mysql database and
@@ -908,7 +904,7 @@ class Account(object):
       raise DecryptionRequired(self.GetUsername())
 
     self._perm.PullUpPrivileges()
-    self._perm.PushDownPrivileges(query_callback)
+    self._perm.PushDownPrivileges(dbh)
     self._perm.PullUpPrivileges()
 
     ret = {
@@ -946,13 +942,12 @@ class Set(object):
     # username -> Account
     self._accounts = {}
 
-  def GetTables(self, query_callback):
+  def GetTables(self, dbh):
     """Generate a table set for each account, then merge them all together.
 
     Args:
-      query_callback: A function to call that takes a SQL query and returns the
-        results from fetchall().  Only used for read-only, schema-description
-        queries here.
+      dbh: Database handle. Only used here for read-only, schema-description
+        queries.
 
     Returns:
       A dictionary where the keys are a table name in the mysql database and
@@ -964,7 +959,7 @@ class Set(object):
       # account object, expanding out the privileges. This can result in a much
       # larger object, so we don't want to keep it around.
       temp_account = account.Clone()
-      acct_tables = temp_account.GetTables(query_callback)
+      acct_tables = temp_account.GetTables(dbh)
       for table, result in acct_tables.iteritems():
         if table in tables:
           tables[table].Merge(result)
@@ -1006,20 +1001,10 @@ class Set(object):
       new_set.AddAccount(account)
     return new_set
 
-  def Decrypt(self, key, threads=1):
+  def Decrypt(self, key):
     """Decrypt hashes for all accounts in this set."""
-    # TODO(flamingcow): tlslite has thread-safety issues for at least some
-    # provider libraries. Figure out how to fix this.
-    em = thread_tools.EventManager(threads)
-    callbacks = []
     for account in self._accounts.itervalues():
-      inner_callback = functools.partial(account.Decrypt, key)
-      callback = thread_tools.BlockingCallback(inner_callback)
-      em.Add(callback)
-      callbacks.append(callback)
-    for callback in callbacks:
-      callback.Wait()
-    em.Shutdown()
+      account.Decrypt(key)
 
 
 # For use by code defining permissions:

@@ -161,24 +161,11 @@ class PermissionsFile(object):
     else:
       self._decryption_key = None
 
-  @staticmethod
-  def GetAccountTables(dbh, account):
-    """Generate a table set for a single account."""
-    if dbh:
-      callback = dbh.CachedExecuteOrDie
-    else:
-      callback = None
-    return account.GetTables(query_callback=callback)
-
   def GetSetTables(self, dbh, set_name):
     """Generate a table set for each account, then merge them all together."""
-    if dbh:
-      callback = dbh.CachedExecuteOrDie
-    else:
-      callback = None
     if self._decryption_key:
       self._sets[set_name].Decrypt(self._decryption_key)
-    return self._sets[set_name].GetTables(callback)
+    return self._sets[set_name].GetTables(dbh)
 
   @staticmethod
   def GetSQL(tables, delete_where=None, map=None, extended_insert=True):
@@ -303,7 +290,7 @@ class PermissionsFile(object):
     """
     if user:
       account = self._sets[set_name].GetAccount(user)
-      tables = self.GetAccountTables(dbh, account)
+      tables = account.GetTables(dbh)
       print '\n'.join(self.GetSQL(tables, None, self.PUSH_MAP))
     else:
       tables = self.GetSetTables(dbh, set_name)
