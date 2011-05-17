@@ -37,9 +37,7 @@ class DbChecksummer(object):
 
   A DbChecksummer performs a checksumming job that submits many consecutive
   queries against a database, until all desired tables have been checksummed.
-  An instance can be re-used, by calling ChecksumTables() repeatedly. Most
-  input parameters are provided in the "config" dictionary (name -> value) so
-  that the class can be easily used as a droid module, or standalone program.
+  An instance can be re-used, by calling ChecksumTables() repeatedly.
 
   The DbChecksummer is designed to be used as follows:
   db_checksummer.PrepareToChecksum()
@@ -47,80 +45,72 @@ class DbChecksummer(object):
     time.sleep(db_checksummer.GetNextWait())
   """
 
-  # config is a dictionary from parameter names to values
-  def __init__(self, query_func, config, db):
-    """Initialize the DbChecksummer class with parameters in config dictionary.
+  def __init__(self, dbh, result_table, golden_table, job_started=None,
+               scan_rate=10000000, secs_per_query=1.0, rows_per_query=None,
+               hours_to_run=None, utilization=0.02, tables_to_skip=(),
+               engines_to_check=('InnoDB',), tables_to_check=(),
+               column_types_to_skip=()):
+    """Initialize the DbChecksummer.
 
     Args:
-      query_func: instance of the mysql_connection droid module Query() or the
-                  imitation_droid_connection.Query(). Used to query the db.
-      config: dictionary of parameter names to values.
-      db: string containing the database name.
-    Raises:
-      Error: config dictionary does not have all of the proper entries.
+      dbh: Database connection handle.
+      result_table: Table name to write statement-based results to (possibly
+        different on master/slave).
+      golden_table: Table name to write golden results to (authoritative from
+        master).
+      job_started: MySQL-formatted date of job start.
+      scan_rate: Estimated checksum speed in input bytes per person.
+      secs_per_query: Seconds per query (used to auto-scale rows_per_query).
+      rows_per_query: Suggested rows per checksum query (overrides
+        secs_per_query).
+      hours_to_run: Hours to run until completion of a full checksum pass
+        (overrides utilization).
+      utilization: Fraction of time to query db.
+      tables_to_skip: List of tables to skip.
+      engines_to_check: List of storage engines to check.
+      tables_to_check: List of tables to check.
+      column_types_to_skip: List of column types to skip.
     """
-    # Assert the required parameters are in the config dictionary
-    assert config.get('result_table', None)
-    assert config.get('golden_table', None)
-
-    self._Query = query_func  # Capitalized member because it is a function.
-    self._config = config
-    self._db = db
+    self._dbh = dbh
+    self._result_table = result_table
+    self._golden_table = golden_table
+    self._job_started = (job_started or
+                         self._dbh.ExecuteOrDie('SELECT NOW()')[0]['NOW()'])
     self._tables = []
     self._current_table = None
+    self._monitor = drift_policies.ProgressMonitor(scan_rate)
 
-    # Initialize JobStarted
-    if not config.get('job_started', None):
-      now_result = self._Query('SELECT NOW()')
-      if now_result:
-        self._job_started = now_result[0]['NOW()']
-      else:
-        raise Error('MySQL Connection problem: SELECT NOW() failed')
-    else:
-      self._job_started = config['job_started']
-
-    # Initialize the query scheduler
-    if not config.get('scan_rate', None):
-      raise Error('Must provide scan_rate parameter')
-    self._monitor = drift_policies.ProgressMonitor(config['scan_rate'])
-
-    if config.get('secs_per_query', None):
-      self._batch_sizer = drift_policies.FixedQueryTimePolicy(
-          self._monitor, config['secs_per_query'])
-    elif config.get('rows_per_query', None):
+    if rows_per_query:
       self._batch_sizer = drift_policies.FixedQuerySizePolicy(
-          self._monitor, config['rows_per_query'])
+          self._monitor, rows_per_query)
+    elif secs_per_query:
+      self._batch_sizer = drift_policies.FixedQueryTimePolicy(
+          self._monitor, secs_per_query)
     else:
-      raise Error('Must provide secs_per_query or rows_per_query parameter')
+      raise Error('Must pass secs_per_query or rows_per_query')
 
-    if config.get('utilization', None):
-      self._wait_timer = drift_policies.FixedUtilizationPolicy(
-          self._monitor, config['utilization'])
-    elif config.get('hours_to_run', None):
+    if hours_to_run:
       self._wait_timer = drift_policies.FixedRunTimePolicy(
-          self._monitor, config['hours_to_run'] * 3600)
+          self._monitor, hours_to_run * 3600)
+    elif utilization:
+      self._wait_timer = drift_policies.FixedUtilizationPolicy(
+          self._monitor, utilization)
     else:
-      raise Error('Must provide utilization or hours_to_run parameter')
+      raise Error('Must pass utilization or hours_to_run')
 
-    # Parse table restrictions
-    self._skip_tables = config.get('tables_to_skip', '').split(',')
-    self._engine_list = config.get('engines_to_check', '').split(',')
-    self._table_list = config.get('tables_to_check', '').split(',')
-    if '' in self._engine_list:
-      self._engine_list.remove('')
-    if '' in self._table_list:
-      self._table_list.remove('')
+    self._skip_tables = tables_to_skip
+    self._engine_list = engines_to_check
+    self._table_list = tables_to_check
+    self._column_types_to_skip = column_types_to_skip
 
   def __getstate__(self):
     """Select which fields get saved when this object is pickled.
 
-    We save almost everything. We exclude the _Query function pointer because
-    we have to, and we exclude the _tables list since it is large, and it is
-    safer to rebuild when we have a fresh database connection anyway.
+    We save almost everything. We exclude the _dbh database connectionhandle
+    because we have to, and we exclude the _tables list since it is large, and
+    it is safer to rebuild when we have a fresh database connection anyway.
     """
     state_dict = {}
-    state_dict['_config'] = self._config
-    state_dict['_db'] = self._db
     state_dict['_current_table'] = self._current_table
     state_dict['_job_started'] = self._job_started
     state_dict['_monitor'] = self._monitor
@@ -131,14 +121,13 @@ class DbChecksummer(object):
     state_dict['_table_list'] = self._table_list
     return state_dict
 
-  def SetQueryFunction(self, query_func):
-    """After unpickling, we need to set the query function.
+  def SetDatabaseHandle(self, dbh):
+    """After unpickling, we need to set the database connection handle.
 
     Args:
-      query_func: instance of the mysql_connection droid module Query() or the
-                  imitation_droid_connection.Query(). Used to query the db.
+      dbh: Instance of db.py:BaseConnection
     """
-    self._Query = query_func
+    self._dbh = dbh
 
   def SetUtilization(self, new_utilization_rate):
     """Change the utilization of the checksum job, even mid-run.
@@ -156,13 +145,11 @@ class DbChecksummer(object):
     data size estimates so that it can make informed scheduling decisions.
     """
     # Get list of tables by running show table status
-    table_stats = self._Query('SHOW TABLE STATUS FROM %s' % self._db)
-    if not table_stats:
-      raise Error('SHOW TABLE STATUS FROM %s does not return rows.' % self._db)
+    table_stats = self._dbh.ExecuteOrDie('SHOW TABLE STATUS')
+
     # Create and initialize a TableChecksummer for each table
     self._tables = []
     for row in table_stats:
-
       # Obey specified table restrictions
       if self._engine_list and row['Engine'] not in self._engine_list:
         continue
@@ -170,10 +157,13 @@ class DbChecksummer(object):
         continue
       if self._table_list and row['Name'] not in self._table_list:
         continue
-      self._tables.append(TableChecksummer(self._Query, self._monitor,
-                                           self._batch_sizer, self._wait_timer,
-                                           self._config, self._db, row['Name'],
-                                           self._job_started))
+      self._tables.append(
+          TableChecksummer(self._dbh, self._monitor,
+                           self._batch_sizer, row['Name'],
+                           self._job_started,
+                           self._result_table,
+                           self._golden_table,
+                           column_types_to_skip=self._column_types_to_skip))
 
       self._monitor.AddTable(row['Name'], row['Rows'], row['Data_length'])
 
@@ -181,7 +171,7 @@ class DbChecksummer(object):
     """Provides access to the last checksum job start time.
 
     Returns:
-      Empty string if job never started, DD/MM/YYYY HH:MM:SS otherwise
+      DD/MM/YYYY HH:MM:SS
     """
     return self._job_started
 
@@ -193,14 +183,14 @@ class DbChecksummer(object):
     """
     self._AnalyzeTables()
     self._position = 0
-    if not self._current_table and len(self._tables):
+    if self._tables and not self._current_table:
       self._current_table = self._tables[self._position]
     while self._position < len(self._tables):
       if (self._tables[self._position].table_name ==
           self._current_table.table_name):
         # If this is a restore, we use the saved table in _current_table.
         self._tables[self._position] = self._current_table
-        self._current_table.SetQueryFunction(self._Query)
+        self._current_table.SetDatabaseHandle(self._dbh)
         self._current_table.PrepareToChecksum()
         break
       self._position += 1
@@ -208,8 +198,8 @@ class DbChecksummer(object):
   def ChecksumQuery(self):
     """Call repeatedly until it returns False to checksum the database.
 
-    Caller should sleep for the returned number of seconds before issuing
-    the next ChecksumQuery() call.
+    Caller should sleep for the number of seconds returned by GetNextWait()
+    before issuing the next ChecksumQuery() call.
 
     Returns:
       False if checksumming is complete, True if there are more queries to run.
@@ -226,9 +216,7 @@ class DbChecksummer(object):
 
   def GetNextWait(self):
     """Suggests time to sleep before next checksum query."""
-    if self._position >= len(self._tables):
-      return 0
-    return self._tables[self._position].GetNextWait()
+    return self._wait_timer.GetNextWait()
 
   def ReportPerformance(self):
     """Provides information about checksumming progress and performance.
@@ -257,35 +245,32 @@ class TableChecksummer(object):
   table_name is a publicly accessible string containing the table's name.
   """
 
-  def __init__(self, query_func, monitor, batch_sizer, wait_timer, config, db,
-               table, job_started):
-    """Initialize TableChecksummer with config dictionary.
+  def __init__(self, dbh, monitor, batch_sizer, table, job_started,
+               result_table, golden_table, column_types_to_skip=(),
+               row_condition=''):
+    """Initialize TableChecksummer.
 
     Args:
-      query_func: instance of the mysql_connection droid module Query function
-                  or the imitation_droid_connection class Query function.
+      dbh: Database connection handle.
       monitor: instance of ProgressMonitor class, tracks progress.
       batch_sizer: subclass of BatchSizePolicy, determines rows per query.
-      wait_timer: subclass of WaitTimePolicy, determines time between queries.
-      config: dictionary of parameter names to values.
-      db: string containing the database name.
       table: string containing the table name.
       job_started: string indicating job start time in MySQL now() format.
+      result_table: Table to write statement-generated checksums to.
+      golden_table: Table to write literal checksums to.
+      column_types_to_skip: List of column tables to not checksum.
+      row_condition: SQL expression to choose which rows to checksum.
     """
-    self._Query = query_func  # Capitalized member because it is a function.
+    self._dbh = dbh
     self._monitor = monitor
     self._batch_sizer = batch_sizer
-    self._wait_timer = wait_timer
-    self._db = db
     self.table_name = table
-    self._skip_column_types = config.get('column_types_to_skip', '').split(',')
-    self._row_condition = config.get('row_condition', '')
-    # The following are required parameters
-    self._result_table = config.get('result_table')
-    self._golden_table = config.get('golden_table')
+    self._skip_column_types = column_types_to_skip
+    self._row_condition = row_condition
+    self._result_table = result_table
+    self._golden_table = golden_table
     self._job_started = job_started
     self._chunk = 1
-    self._prepared = False
     self._query_dict = {}
 
   def __getstate__(self):
@@ -297,8 +282,6 @@ class TableChecksummer(object):
     state_dict = {}
     state_dict['_monitor'] = self._monitor
     state_dict['_batch_sizer'] = self._batch_sizer
-    state_dict['_wait_timer'] = self._wait_timer
-    state_dict['_db'] = self._db
     state_dict['table_name'] = self.table_name
     state_dict['_skip_column_types'] = self._skip_column_types
     state_dict['_row_condition'] = self._row_condition
@@ -307,17 +290,15 @@ class TableChecksummer(object):
     state_dict['_job_started'] = self._job_started
     state_dict['_chunk'] = self._chunk
     state_dict['_query_dict'] = self._query_dict
-    state_dict['_prepared'] = False  # We need to re-prepare after reloading
     return state_dict
 
-  def SetQueryFunction(self, query_func):
-    """After unpickling, we need to set the query function.
+  def SetDatabaseHandle(self, dbh):
+    """After unpickling, we need to set the database connection handle.
 
     Args:
-      query_func: instance of the mysql_connection droid module Query() or the
-                  imitation_droid_connection.Query(). Used to query the db.
+      dbh: An instance of db.py:BaseConnection.
     """
-    self._Query = query_func
+    self._dbh = dbh
 
   def PrepareToChecksum(self):
     """Call before making any calls to ChecksumQuery."""
@@ -335,8 +316,8 @@ class TableChecksummer(object):
         keys.append("%s = '%s'" % (key_field, key_value.replace("'","\\'")))
     if keys:
       self._query_dict['initial_where'] = 'WHERE %s' % ' AND '.join(keys)
-    self._Query(TableChecksummer.INITIALIZATION_QUERY % self._query_dict)
-    self._prepared = True
+    self._dbh.ExecuteOrDie(
+        TableChecksummer.INITIALIZATION_QUERY % self._query_dict)
 
   def ChecksumQuery(self):
     """Issues one checksum query against the table.
@@ -347,16 +328,16 @@ class TableChecksummer(object):
     Returns:
       False when the table has completed checksumming, True otherwise.
     """
-    if not self._prepared:
-      return False
     rows_to_read = self._batch_sizer.GetNextBatchSize(self.table_name)
     self._query_dict['batch_size'] = rows_to_read
     self._query_dict['chunk'] = self._chunk
     self._chunk += 1
     start_time = time.time()
-    self._Query('SELECT %(subsequent_assignment)s' % self._query_dict)
-    self._Query(TableChecksummer.CHECKSUM_QUERY % self._query_dict)
-    count_result = self._Query('SELECT @count')
+    self._dbh.ExecuteOrDie(
+        'SELECT %(subsequent_assignment)s' % self._query_dict)
+    self._dbh.ExecuteOrDie(
+        TableChecksummer.CHECKSUM_QUERY % self._query_dict)
+    count_result = self._dbh.ExecuteOrDie('SELECT @count')
     if not count_result:  # If we encounter a problem, we give up on this table
       return False
     rows_read = count_result[0]['@count']
@@ -368,14 +349,11 @@ class TableChecksummer(object):
     self._ReinsertByValue()
     return rows_read == rows_to_read
 
-  def GetNextWait(self):
-    """Seconds the caller should wait before next ChecksumQuery call."""
-    return self._wait_timer.GetNextWait(self.table_name)
-
   def _ReinsertByValue(self):
     """Selects a checksum entry, submits a new insert with the same values."""
     # Returns ChunkDone, Offsets, Checksums, Count
-    rows = self._Query(TableChecksummer.GET_CHECKSUM_QUERY % self._query_dict)
+    rows = self._dbh.ExecuteOrDie(
+        TableChecksummer.GET_CHECKSUM_QUERY % self._query_dict)
     # TODO(benhandy): how should we handle this error?
     if not rows or len(rows) != 1:
       return
@@ -385,7 +363,8 @@ class TableChecksummer(object):
     self._query_dict['offset_copy'] = row['Offsets']
     self._query_dict['checksum_copy'] = row['Checksums']
     self._query_dict['count_copy'] = row['Count']
-    self._Query(TableChecksummer.INSERT_CHECKSUM_QUERY % self._query_dict)
+    self._dbh.ExecuteOrDie(
+        TableChecksummer.INSERT_CHECKSUM_QUERY % self._query_dict)
 
   def _IdentifyColumns(self):
     """Identify primary key and other columns, applying column filters.
@@ -393,7 +372,7 @@ class TableChecksummer(object):
     Returns:
       True if the columns and primary key were found, False otherwise.
     """
-    rows = self._Query('DESCRIBE %s.%s' % (self._db, self.table_name))
+    rows = self._dbh.ExecuteOrDie('DESCRIBE `%s`' % self.table_name)
     if not rows:  # First checksum query will fail
       return False
 
@@ -408,7 +387,7 @@ class TableChecksummer(object):
         self._columns.append(row['Field'])
 
     # Describe table doesn't return primary key in order, use show indexes from
-    rows = self._Query('SHOW INDEXES FROM %s.%s' % (self._db, self.table_name))
+    rows = self._dbh.ExecuteOrDie('SHOW INDEXES FROM `%s`' % self.table_name)
     if not rows:
       return False
     for row in rows:
@@ -457,8 +436,7 @@ class TableChecksummer(object):
     if self._row_condition:
       where_str = ' AND '.join(['(' + where_str + ')', self._row_condition])
 
-    self._query_dict.update({'db': self._db,
-                             'table': self.table_name,
+    self._query_dict.update({'table': self.table_name,
                              'result_table': self._result_table,
                              'golden_table': self._golden_table,
                              'offsets': offset_str,
@@ -476,7 +454,7 @@ class TableChecksummer(object):
 # SQL Queries
   INITIALIZATION_QUERY = """
 SELECT %(initial_assignment)s
-FROM %(db)s.%(table)s
+FROM `%(table)s`
 %(initial_where)s
 ORDER BY %(primary_key)s
 LIMIT 1
@@ -486,9 +464,9 @@ LIMIT 1
 REPLACE INTO %(result_table)s
 (DatabaseName, TableName, Chunk, JobStarted, ChunkDone,
 Offsets, Checksums, Count)
-SELECT '%(db)s', '%(table)s', %(chunk)s, '%(job_started)s',
+SELECT DATABASE(), '%(table)s', %(chunk)s, '%(job_started)s',
 NOW(), %(offsets)s, %(checksums)s, @count := count(*)
-FROM (SELECT * FROM %(db)s.%(table)s FORCE INDEX (PRIMARY)
+FROM (SELECT * FROM `%(table)s` FORCE INDEX (PRIMARY)
 WHERE %(where)s
 ORDER BY %(primary_key)s
 LIMIT %(batch_size)s) f
@@ -497,7 +475,7 @@ LIMIT %(batch_size)s) f
   GET_CHECKSUM_QUERY = """
 SELECT ChunkDone, Offsets, Checksums, Count
 FROM %(result_table)s
-WHERE DatabaseName='%(db)s' AND
+WHERE DatabaseName=DATABASE() AND
 TableName='%(table)s' AND
 Chunk=%(chunk)s AND
 JobStarted='%(job_started)s' AND
@@ -508,7 +486,7 @@ Count=@count
 REPLACE INTO %(golden_table)s
 (DatabaseName, TableName, Chunk, JobStarted, ChunkDone,
 Offsets, Checksums, Count)
-VALUES ('%(db)s', '%(table)s', %(chunk)s, '%(job_started)s',
+VALUES (DATABASE(), '%(table)s', %(chunk)s, '%(job_started)s',
 '%(chunk_done_copy)s', '%(offset_copy)s', '%(checksum_copy)s',
 %(count_copy)s)
 """.replace('\n', ' ').strip()

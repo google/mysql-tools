@@ -136,7 +136,7 @@ class WaitTimePolicy(object):
   This class should not be instantiated directly.
   """
 
-  def GetNextWaitTime(self, table_name):
+  def GetNextWaitTime(self):
     """Suggest time to wait before issuing next checksum query."""
     raise NotImplementedError('GetNextWaitTime() not implemented.')
 
@@ -240,7 +240,7 @@ class FixedUtilizationPolicy(WaitTimePolicy):
     """
     self._utilization = new_utilization_rate
 
-  def GetNextWait(self, unused_table_name):
+  def GetNextWait(self):
     """Suggest time to wait before issuing next checksum query.
 
     Next wait time is based on previous query time.
@@ -282,7 +282,7 @@ class FixedRunTimePolicy(WaitTimePolicy):
     """
     self._utilization = new_utilization_rate
 
-  def GetNextWait(self, unused_table_name):
+  def GetNextWait(self):
     """Suggest time to wait before issuing next checksum query.
 
     Wait time between queries is always the same.
