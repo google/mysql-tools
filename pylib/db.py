@@ -134,7 +134,8 @@ class Spec(dict):
       (parts, portstr) = (parts[:4], parts[4])
       kwargs.setdefault('port', int(portstr))
     if len(parts) != 4:
-      raise ValueError('Invalid DBSpec: wrong number of parts')
+      raise ValueError('Invalid DBSpec: wrong number of parts (%d)' %
+                       len(parts))
     kwargs.setdefault('host', parts[0])
     if not kwargs.setdefault('user', parts[1]):
       kwargs['user'] = os.getenv('USER')
@@ -143,6 +144,17 @@ class Spec(dict):
     return Spec(**kwargs)
 
   def __init__(self, **args):
+    """Construct a new Spec using args.
+
+    Args:
+      args:
+        'dbtype' - Must be in _DB_TYPES.
+        'host' - A hostname specification, see db.Spec.Parse().
+        'user' - DB user name
+        'passwd' - DB user's password
+        'db' - The database to open.
+        'port' - Port number to connect to at the host. (optional)
+    """
     dict.__init__(self, args)
 
     # Handle UNIX socket host syntax
@@ -161,6 +173,14 @@ class Spec(dict):
       self['passwd'] = open(self['passwd'][6:]).read().strip()
 
     self._expander = _GetExpander(args['host'], self)
+
+  def __str__(self):
+    """Returns the dbspec string for this instance, sans password."""
+    result = '%s:%s:%s:*:%s' % (self['dbtype'], self['host'], self['user'],
+                                self['db'])
+    if self.get('port'):
+      result += ':%d' % self.get('port')
+    return result
 
   def IsSingle(self):
     """Return whether this spec refers to a single host."""
@@ -402,7 +422,9 @@ class _BaseConnection(object):
 
   def __init__(self):
     self._closed = False
-    self._creation = ''.join(traceback.format_stack())
+    # We strip the last 2 frames (one for BaseConnection and one for the
+    # implementation class constructor).
+    self._creation = ''.join(traceback.format_stack()[:-2])
     self._cache = {}
 
   def __del__(self):
@@ -410,6 +432,14 @@ class _BaseConnection(object):
     if not self._closed:
       logging.error('Implicitly closed database handle, created here:\n%s',
                     self._creation)
+    self.Close()
+
+  def __enter__(self):
+    """'with' keyword begins."""
+    return self
+
+  def __exit__(self, type, value, traceback):
+    """'with' keyword ends."""
     self.Close()
 
   @staticmethod
@@ -598,10 +628,7 @@ class QueryConsumer(threading.Thread):
 
     if 'host' in self._dbargs:
       self.setName(self._dbargs['host'])
-      self._resolver = GetResolver(self._dbargs['host'])
-    if 'conv' not in self._dbargs:
-      # Default to no field conversion
-      self._dbargs['conv'] = {}
+      self._resolver = GetResolver(self._dbargs)
 
   def run(self):
     """Main loop inside the consumer thread."""
@@ -640,10 +667,10 @@ class QueryConsumer(threading.Thread):
     if not self._dbh:
       args = self._dbargs.copy()
       # Custom dbtypes get to do their own resolution
-      if self._resolver and not (
-          'dbtype' in args and args['dbtype'] != 'mysql'):
+      if self._resolver and (
+          'dbtype' in args and args['dbtype'] == 'mysql'):
         try:
-          (args['host'], port) = self._resolver()
+          (args['host'], port) = random.choice(self._resolver())
         except ResolutionError, e:
           logging.exception('Resolution failure.')
           return QueryErrors(('Code', 'Message'), ((1, str(e)),))
@@ -964,9 +991,20 @@ def _GetExpander(name, dbargs):
   return _NoOpExpander(name)
 
 
-def GetResolver(name):
+def GetResolver(dbspec):
+  """Create a resolver suitable to the given name.
+
+  Args:
+    dbspec: a db.Spec instance to resolve into one or more (ip, port) pairs.
+      Port selection is determined by dbspec data. For example: the hostname
+      (dbspec['host']) may contain a port number (e.g. 'name:port').
+
+  Returns:
+    A Cache object that returns the resolver result: [(ip, port)]
+  """
+
   # If it's nothing else, we assume that it's DNS
-  return DNSResolver(name)
+  return DNSResolver(dbspec)
 
 
 class Cache(object):
@@ -1039,9 +1077,9 @@ class DNSResolver(Cache):
   def _Lookup(self):
     if self._name == 'localhost':
       # Hack to allow connecting via the UNIX socket.
-      return ('localhost', _DEFAULT_PORT)
+      return [('localhost', _DEFAULT_PORT)]
     try:
-      ip = random.choice(socket.gethostbyname_ex(self._name)[2])
+      ip_list = socket.gethostbyname_ex(self._name)[2]
     except socket.gaierror:
       raise ResolutionError('Failed to resolve %s' % self._name)
-    return (ip, _DEFAULT_PORT)
+    return [(ip, _DEFAULT_PORT) for ip in ip_list]
