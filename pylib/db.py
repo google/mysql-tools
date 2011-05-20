@@ -1004,7 +1004,7 @@ def GetResolver(dbspec):
   """
 
   # If it's nothing else, we assume that it's DNS
-  return DNSResolver(dbspec)
+  return DNSResolver(dbspec['host'])
 
 
 class Cache(object):
