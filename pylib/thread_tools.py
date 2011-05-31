@@ -59,14 +59,22 @@ class BlockingCallback(object):
   def __init__(self, callback):
     self._callback = callback
     self._notification = Notification()
+    self._semaphore = threading.Semaphore(0)
 
   def __call__(self, *args, **kwargs):
     ret = self._callback(*args, **kwargs)
-    self._notification.Notify()
+    self._semaphore.release()
+    if not self._notification.HasBeenNotified():
+      self._notification.Notify()
     return ret
 
   def Wait(self):
     self._notification.WaitForNotification()
+
+  def WaitForNum(self, num):
+    """Wait for the callback to be called num times."""
+    for _ in xrange(num):
+      self._semaphore.acquire()
 
 
 class CancellableCallback(object):
