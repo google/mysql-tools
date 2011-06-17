@@ -74,6 +74,16 @@ def EncryptHash(key, hashed):
   return base64.b64encode(encrypted)
 
 
+def EncryptHashInteractive(public_keyfile):
+  """Encrypt a hash from the console."""
+  key = PublicKeyFromFile(public_keyfile)
+  mysql_hash = raw_input('MySQL hash: ')
+  # Try to make it hard for confused people to botch their permissions file.
+  if not (mysql_hash.startswith('*') and len(mysql_hash) == 41):
+    print 'BEWARE! That doesn\'t look like a new-style mysql hash!'
+  print EncryptHash(key, mysql_hash)
+
+
 def EncryptPasswordInteractive(public_keyfile):
   """Hash and encrypt a password with interaction from the console."""
   key = PublicKeyFromFile(public_keyfile)
