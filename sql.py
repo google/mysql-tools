@@ -42,7 +42,8 @@ from pylib import app
 from pylib import db
 
 
-_CSV_RE = re.compile('^\s*CSV\s+(?P<query>.*)$', re.IGNORECASE | re.DOTALL)
+_CSV_RE = re.compile('^\s*CSV\s+(?P<query>.*)$',
+                     re.IGNORECASE | re.DOTALL | re.MULTILINE)
 
 
 def Execute(dbh, query):
@@ -69,11 +70,18 @@ def Execute(dbh, query):
       print result
 
 
+def GetLines(prompt):
+  while True:
+    try:
+      yield raw_input(prompt)
+    except EOFError:
+      print
+      return
+
+
 def main(argv):
   if len(argv) < 2:
     raise app.UsageError('Please specify a dbspec')
-
-  dbh = db.Connect(argv[1])
 
   try:
     histfile = os.path.join(os.environ['HOME'], '.mysql_history')
@@ -83,32 +91,14 @@ def main(argv):
     pass
 
   if sys.stdin.isatty():
-    baseprompt = '%s> ' % argv[1]
-    continueprompt = '%s> ' % (' ' * len(argv[1]))
+    prompt = '%s> ' % argv[1]
   else:
-    baseprompt = ''
-    continueprompt = ''
+    prompt = ''
 
-  while True:
-    try:
-      line = ''
-      line = raw_input(baseprompt)
-      if not line:
-        continue
-      if line.strip()[0:2] != '--':
-        while line.strip()[-1] != ';':
-          line = line + '\n' + raw_input(continueprompt)
-      Execute(dbh, line)
-    except EOFError:
-      if line:
-        Execute(dbh, line)
-      else:
-        print
-      dbh.Close()
-      return 0
-    except KeyboardInterrupt:
-      dbh.Close()
-      return 0
+  with db.Connect(argv[1]) as dbh:
+    for statement in db.XCombineSQL(GetLines(prompt)):
+      Execute(dbh, statement)
+
 
 if __name__ == '__main__':
   app.run()
