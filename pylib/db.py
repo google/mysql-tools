@@ -722,7 +722,7 @@ class QueryConsumer(threading.Thread):
       return QueryErrors(('Code', 'Message'), ((code, message),))
     except Exception, e:
       logging.exception('Query returned unknown error.')
-      return QueryErrors(('Code', 'Message'), ((4, str(e))))
+      return QueryErrors(('Code', 'Message'), ((4, str(e)),))
     return VirtualTable(fields, result, types)
 
   def _Connect(self, args):
@@ -812,7 +812,7 @@ class MultiConnection(_BaseConnection):
   """Wrap a set of real connections; execute in parallel."""
 
   _SHARD_RE = re.compile('^\s*ON\s+SHARD\s+(?P<shard>[\d,]+)\s+(?P<query>.*)$',
-                         re.IGNORECASE | re.DOTALL)
+                         re.IGNORECASE | re.DOTALL | re.MULTILINE)
 
   def __init__(self, **kwargs):
     _BaseConnection.__init__(self)
@@ -839,7 +839,7 @@ class MultiConnection(_BaseConnection):
     Returns:
       An opaque handle to the running query, to be passed to Wait() or Cancel().
     """
-    shard_match = self._SHARD_RE.match(query)
+    shard_match = self._SHARD_RE.search(query)
     if shard_match:
       shards = [int(shard) for shard in shard_match.group('shard').split(',')]
       query = shard_match.group('query')
@@ -1083,3 +1083,27 @@ class DNSResolver(Cache):
     except socket.gaierror:
       raise ResolutionError('Failed to resolve %s' % self._name)
     return [(ip, _DEFAULT_PORT) for ip in ip_list]
+
+
+def XSplit(value, sep):
+  """Split the input as a generator."""
+  loc = 0
+  while True:
+    splitpoint = value.find(sep, loc)
+    if splitpoint == -1:
+      yield value[loc:]
+      return
+    yield value[loc:splitpoint]
+    loc = splitpoint + len(sep)
+
+
+def XCombineSQL(lines):
+  """Combine lines into SQL statements."""
+  buf = []
+  for line in lines:
+    buf.append(line)
+    stripped = line.strip()
+    if stripped.endswith(';') and not stripped.startswith('-- '):
+      statement = '\n'.join(buf).strip()
+      buf = []
+      yield statement
