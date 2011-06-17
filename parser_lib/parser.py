@@ -31,6 +31,11 @@ import logging
 import pyparsing as pyp
 import re
 
+try:
+  from pylib import db
+except ImportError:
+  from ..pylib import db
+
 
 class Error(Exception): pass
 class ParseError(Error): pass
@@ -71,13 +76,15 @@ class SQLParser(object):
   def ParseString(self, string):
     logging.debug('Parsing: %r', string)
     try:
-      return self._SQL.parseString(string)
+      for statement in db.XCombineSQL(db.XSplit(string, '\n')):
+        yield self._QUERY.parseString(statement)[0]
     except pyp.ParseException, e:
       raise ParseError(e)
 
   # DISCARDED
 
-  _COMMENT_START = pyp.Literal('--').suppress()
+  _COMMENT_START = pyp.Keyword(
+      '--', identChars=pyp.Keyword.DEFAULT_KEYWORD_CHARS + '-')
   _COMMENT_LINE = _COMMENT_START + pyp.restOfLine
   _COMMENT_BLOCK = pyp.Regex(r'/\*(?=[^!])(?:[^*]*\*+)+?/')
 
@@ -934,13 +941,8 @@ class SQLParser(object):
 
   _QUERY = pyp.Group(_STATEMENT
                      + _LINE_DELIMITER).setResultsName('query')
-
-  _SQL = pyp.Group(pyp.OneOrMore(_QUERY)
-                    + pyp.StringEnd()
-                    ).setResultsName('queries')
-
-  _SQL.ignore(_COMMENT_LINE)    # don't parse comments
-  _SQL.ignore(_COMMENT_BLOCK)
+  _QUERY.ignore(_COMMENT_LINE)
+  _QUERY.ignore(_COMMENT_BLOCK)
 
 
 class GoogleSQLParser(SQLParser):
@@ -957,10 +959,5 @@ class GoogleSQLParser(SQLParser):
   _QUERY = pyp.Group(pyp.Optional(_GOOGLE_SQL_EXTENSION)
                      + SQLParser._STATEMENT
                      + SQLParser._LINE_DELIMITER).setResultsName('query')
-
-  _SQL = pyp.Group(pyp.OneOrMore(_QUERY)
-                   + pyp.StringEnd()
-                   ).setResultsName('queries')
-
-  _SQL.ignore(SQLParser._COMMENT_LINE)    # don't parse comments
-  _SQL.ignore(SQLParser._COMMENT_BLOCK)
+  _QUERY.ignore(SQLParser._COMMENT_LINE)
+  _QUERY.ignore(SQLParser._COMMENT_BLOCK)

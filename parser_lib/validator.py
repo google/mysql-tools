@@ -82,7 +82,7 @@ class Validator(object):
     self._errors = []
     self._warnings = []
 
-  def ValidateTree(self, tokens, string=None, additional_visitors=(),
+  def ValidateTree(self, queries, string=None, additional_visitors=(),
                    max_alter_rows=100000, # for AlterChecker
                    allowed_engines=('InnoDB',), # for CreateTableChecker
                    ):
@@ -95,10 +95,6 @@ class Validator(object):
     Returns:
       Whether the tree validated
     """
-    assert len(tokens) == 1, 'Invalid top-level token count.'
-    queries = tokens[0]
-    assert queries.getName() == 'queries', 'Invalid top-level token.'
-
     visitors = [
         ShardSetChecker(self._schema, string),
         AlterChecker(self._schema, string, max_alter_rows=max_alter_rows),
