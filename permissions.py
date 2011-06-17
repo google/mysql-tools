@@ -18,27 +18,7 @@
 
   permissions.py [flags] COMMAND
 
-Note the --db=DBSPEC flag is required for copy/publish/push commands and may
-be required for push/test depending on your permissions configuration.
-Examples:
-  --db=dbhost#:::dbname#
-  --db=dbhost#:otheruser::dbname#
-
-The --set and --file flags are required for some commands.
-
-Hashing and encryption:
-  decrypt-hash
-    Prompt for an encrypted string and print its hash decrypted with
-    --private_keyfile.
-  encrypt-password
-    Prompt for a password and print its hash encrypted with --public_keyfile.
-  generate-key
-    Generate encryption keys and write them to --public_keyfile and
-    --private_keyfile.
-  hash-password
-    Prompt for a password and print its MySQL hash.
-
-Using a permissions file and admin permissions tables:
+Usual COMMANDs:
   copy
     Copy the published permissions --set to --db.
   dump
@@ -51,6 +31,32 @@ Using a permissions file and admin permissions tables:
     Push permissions set --source_set from --file directly to --db.
   test
     Test all permissions sets defined in --file.
+
+Note the --db=DBSPEC flag is required for copy/publish/push commands and may
+be required for push/test depending on your permissions configuration.
+Examples:
+  --db=dbhost#:::dbname#
+  --db=dbhost#:otheruser::dbname#
+
+Because some people do not trust the strength of mysql hashes,
+permissions.py is capable of encrypting them with an RSA key pair.  If
+you choose to use this, the following extra COMMANDs will help you
+maintain your permissions file:
+
+  hash-password
+    Prompt for a password and print its MySQL hash.
+  encrypt-password
+    Prompt for a password, compute its mysql hash, encrypt that hash with
+    --public_keyfile, and print to stdout.
+  encrypt-hash
+    Prompt for a mysql hash, encrypt it with --public_keyfile, and print to
+    stdout.
+  decrypt-hash
+    Prompt for an encrypted string, decrypt it with --private_keyfile,
+    print the results (hopefully a MySQL hash) to stdout.
+  generate-key
+    Generate encryption keys and write them to --public_keyfile and
+    --private_keyfile.
 """
 
 __author__ = 'flamingcow@google.com (Ian Gulliver)'
@@ -73,7 +79,7 @@ flags.DEFINE_integer('push_duration', None,
 flags.DEFINE_string('file', None,
                     'File containing permissions settings on which to '
                     'operate. The file may contain one or more named sets of '
-                    'permissions')
+                    'permissions.')
 flags.DEFINE_string('public_keyfile', None,
                     'File to write/read public encryption key to/from')
 flags.DEFINE_string('private_keyfile', None,
@@ -87,6 +93,7 @@ flags.DEFINE_string('source_set', None,
 
 
 _COMMANDS = {'decrypt-hash':     utils.DecryptHashInteractive,
+             'encrypt-hash':     utils.EncryptHashInteractive,
              'encrypt-password': utils.EncryptPasswordInteractive,
              'generate-key':     utils.GenerateKey,
              'hash-password':    utils.HashPasswordInteractive,
@@ -147,10 +154,10 @@ def main(argv):
 
   CheckArgs(_COMMANDS[argv[1]], args)
   try:
-    try:
+    if 'self' in args:
       obj = args.pop('self')
       _COMMANDS[argv[1]](obj, **args)
-    except KeyError:
+    else:
       _COMMANDS[argv[1]](**args)
   except db.Error, e:
     # Lose the stack trace; it's not useful for DB errors
