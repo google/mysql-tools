@@ -44,9 +44,9 @@ import copy
 import functools
 
 try:
-  from ..pylib import db
-except (ValueError, ImportError):
   from pylib import db
+except ImportError:
+  from ..pylib import db
 
 import utils
 
