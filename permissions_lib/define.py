@@ -995,6 +995,9 @@ class Set(object):
   def GetAccount(self, username):
     return self._accounts[username]
 
+  def GetAccounts(self):
+    return self._accounts.copy()
+
   def Clone(self):
     new_set = Set()
     for account in self._accounts.itervalues():
