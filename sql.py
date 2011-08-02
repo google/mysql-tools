@@ -40,6 +40,11 @@ import sys
 
 from pylib import app
 from pylib import db
+from pylib import flags
+
+FLAGS = flags.FLAGS
+
+flags.DEFINE_string('charset', 'utf-8', 'Input/output character set')
 
 
 _CSV_RE = re.compile('^\s*CSV\s+(?P<query>.*)$',
@@ -60,20 +65,20 @@ def Execute(dbh, query):
     return
   by_result = {}
   for name, result in results.iteritems():
-    by_result.setdefault(str(result), []).append(name)
+    by_result.setdefault(result, []).append(name)
   if len(by_result) > 1:
     for result, names in by_result.iteritems():
       names.sort()
-      print '%s:\n%s' % (names, result)
+      print '%s:\n%s' % (names, unicode(result).encode(FLAGS.charset))
   else:
     if result:
-      print result
+      print unicode(result).encode(FLAGS.charset)
 
 
 def GetLines(prompt):
   while True:
     try:
-      yield raw_input(prompt)
+      yield raw_input(prompt).decode(FLAGS.charset)
     except EOFError:
       print
       return
