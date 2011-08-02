@@ -16,7 +16,11 @@
 
 __author__ = 'flamingcow@google.com (Ian Gulliver)'
 
-base_tmpl = (Account()
+SetAllowedFields(['ssl_cipher',
+                  'x509_issuer',
+                  'x509_subject'])
+
+base_tmpl = (Account(ssl_cipher='', x509_issuer='', x509_subject='')
              .GrantPrivileges(database='test', privileges=SELECT | INSERT | UPDATE | DELETE | CREATE | DROP)
              .AddAllowedHost(hostname_pattern='%'))
 

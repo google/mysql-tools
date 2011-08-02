@@ -21,18 +21,23 @@ permissions.
 
 A permissions file can use this framework by running::
 
-  user = Account(username='droid', password_hash='*ABD2189031289051')
+  SetAllowedFields(['ssl_cipher', 'x509_issuer', 'x509_subject'])
+  user = Account(username='droid', password_hash='*ABD2189031289051',
+                 ssl_cipher='', x509_issuer='', x509_subject='')
   user.AddAllowedHost(hostname_pattern='%')
   user.Export(set='secondary')
 
 Chained method calls may also be used::
 
-  (Account(username='droid', password_hash='*ABD2189031289051')
+  (Account(username='droid', password_hash='*ABD2189031289051',
+           ssl_cipher='', x509_issuer='', x509_subject='')
    .AddAllowedHost(hostname_pattern='%')
    .GrantPrivileges(privileges=SUPER)
    .Export(set='secondary')
    .GrantPrivileges(privileges=ALL_PRIVILEGES)
    .Export(set='primary'))
+
+SetAllowedFields() should be called once, before defining any Accounts.
 
 See the documentation for L{Account}.
 """
@@ -584,7 +589,14 @@ class Account(object):
     that creating an account does not cause it to appear in permissions output;
     Export() must be called at least once for this to happen.
 
-    All arguments are optional and must be keywords; see InitUser() and
+    In MySQL 5, three keyword arguments are required to prevent db.py
+    from throwing a QueryWarningsException:
+        ssl_cipher='', x509_issuer='', x509_subject=''
+    For this to work, call
+        SetAllowedFields(['ssl_cipher', 'x509_issuer', 'x509_subject'])
+    before instantiating any Accounts.
+
+    All other arguments are optional and must be keywords; see InitUser() and
     SetFields() for available arguments.
 
     Args: see InitUser() and SetFields().
@@ -799,9 +811,9 @@ class Account(object):
     the Ads MySQL build at the time of writing:
 
       ssl_type
-      ssl_cipher
-      x509_issuer
-      x509_subject
+      ssl_cipher (required)
+      x509_issuer (required)
+      x509_subject (required)
       max_questions
       max_updates
       max_connections
