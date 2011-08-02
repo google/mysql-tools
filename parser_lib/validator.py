@@ -405,11 +405,12 @@ class CreateTableChecker(Visitor):
       table = db.AddTable(table_spec['table'][0])
       self.visit(tokens, table=table)
 
-    engine = self._db_schema.GetDefaultEngine()
+    engine = False
     for flag in self._GetDescendants(tokens, 'table_flags_definition'):
       if flag['table_flags_type'][0] not in ('type', 'engine'):
         continue
       engine = flag['table_flags_identifier'][0]
+    engine = engine or self._db_schema.GetDefaultEngine()
     if engine.lower() not in self._allowed_engines:
       self.AddError(tokens, 'CREATE invalid engine: %s' % engine)
     table.SetEngine(engine)
