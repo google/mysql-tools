@@ -93,6 +93,8 @@ class Spec(dict):
       'mysql',
   ]
 
+  _DEFAULT_DB_TYPE = 'mysql'
+
   # (user, host) -> password
   _PW_CACHE = {}
 
@@ -127,9 +129,7 @@ class Spec(dict):
     parts = spec.split(':')
     if parts[0] in cls._DB_TYPES:
       (parts, dbtype) = (parts[1:], parts[0])
-    else:
-      dbtype = 'mysql'
-    kwargs.setdefault('dbtype', dbtype)
+      kwargs.setdefault('dbtype', dbtype)
     if len(parts) == 5:
       (parts, portstr) = (parts[:4], parts[4])
       kwargs.setdefault('port', int(portstr))
@@ -148,13 +148,20 @@ class Spec(dict):
 
     Args:
       args:
-        'dbtype' - Must be in _DB_TYPES.
+        'dbtype' - Must be in _DB_TYPES (optional, defaults to mysql)
         'host' - A hostname specification, see db.Spec.Parse().
         'user' - DB user name
         'passwd' - DB user's password
         'db' - The database to open.
         'port' - Port number to connect to at the host. (optional)
+        'charset' - Character set for both directions of the connection.
+          (optional, defaults to utf8)
     """
+    args.setdefault('dbtype', self._DEFAULT_DB_TYPE)
+    assert args['dbtype'] in self._DB_TYPES, (
+        'Unsupported dbtype %s' % args['dbtype'])
+    args.setdefault('charset', 'utf8')
+
     dict.__init__(self, args)
 
     # Handle UNIX socket host syntax
@@ -233,17 +240,20 @@ class VirtualTable(object):
 
   _contents = 'Rows'
 
-  def __init__(self, fields, result, types=None):
+  def __init__(self, fields, result, types=None, rowcount=None):
     """Constructor.
 
     Args:
       fields: A list of field names
       result: A list of lists of rows with cell data
       types: A list of python type classes for fields
+      rowcount: Number of rows affected by the query. Ignored if result
+                is non-empty.
     """
     self._fields = fields
     self._types = types or []
     self._result = []
+    self._rowcount = rowcount
     for row in result:
       self.Append(row)
 
@@ -314,6 +324,16 @@ class VirtualTable(object):
     """Get the list of Python types for fields."""
     return self._types
 
+  def GetRowsAffected(self):
+    """Get the number of rows affected by the query.
+
+    Returns:
+      For SELECT queries, the number of rows returned.
+      For other queries, the number of rows inserted, updated or deleted.
+      If the query produced an error or warning, returns None.
+    """
+    return self._rowcount
+
   def GetInsertSQLList(self, table_name, max_size=0, extended_insert=True):
     """Turn this table into SQL that would be required to recreate it.
 
@@ -373,6 +393,12 @@ class VirtualTable(object):
       raise TypeError("Field lists don't match (%s vs. %s)" %
                       (self.GetFields(), table.GetFields()))
     self._result.extend(table.GetRows())
+    # If this table has no rowcount, adopt the other table's value
+    other_rowcount = table.GetRowsAffected()
+    if self._rowcount is None or other_rowcount is None:
+      self._rowcount = other_rowcount
+    else:
+      self._rowcount += other_rowcount
 
 
 class QueryErrors(VirtualTable):
@@ -445,7 +471,11 @@ class _BaseConnection(object):
   @staticmethod
   def Escape(value):
     """Escape MySQL characters in a value and wrap in quotes."""
-    return "'%s'" % str(value).replace("'", "''")
+    if isinstance(value, str):
+      # Don't coerce str to unicode, in case the contents are binary
+      return "'%s'" % value.replace("'", "''")
+    else:
+      return "'%s'" % unicode(value).replace("'", "''")
 
   def Submit(self, query):
     """Submit a query for execution, return an opaque operation handle."""
@@ -480,7 +510,7 @@ class _BaseConnection(object):
     results = self.MultiExecute(query, params)
     by_result = {}
     for name, result in results.iteritems():
-      by_result.setdefault(str(result), []).append(name)
+      by_result.setdefault(result, []).append(name)
     if len(by_result) == 1:
       return results.popitem()[1]
     else:
@@ -687,22 +717,24 @@ class QueryConsumer(threading.Thread):
         self._Close()
         return QueryErrors(('Code', 'Message'), ((3, str(e)),))
     try:
+      charset = self._dbargs.get('charset', 'ascii')
+      if isinstance(query, unicode):
+        query = query.encode(charset)
       logging.debug('Executing %s', query)
       self._dbh.query(query)
       if self._stream_results:
         data = self._dbh.use_result()
       else:
         data = self._dbh.store_result()
-      info = self._dbh.info()
-      if info:
-        # TODO(flamingcow): Find a better way to get warning count
-        warnings = int(info.split()[-1])
-        if warnings:
-          # MySQLdb doesn't let us get the actual warning text, just the count
-          return QueryWarnings(('Level', 'Code', 'Message'), [])
+      rowcount = self._dbh.affected_rows()
+      if self._dbh.warning_count() > 0:
+        warnings = self._dbh.show_warnings()
+        return QueryWarnings(('Level', 'Code', 'Message'), warnings)
       if not data:
-        return None
-      fields = [i[0] for i in data.describe()]
+        # Query returned no rows, but might have affected some
+        return VirtualTable([], [], [], rowcount)
+      # Query returned some rows
+      fields = [i[0].decode(charset) for i in data.describe()]
       types = [self._TYPES.get(i[1], None) for i in data.describe()]
       if self._stream_results:
         def StreamResults():
@@ -723,7 +755,7 @@ class QueryConsumer(threading.Thread):
     except Exception, e:
       logging.exception('Query returned unknown error.')
       return QueryErrors(('Code', 'Message'), ((4, str(e)),))
-    return VirtualTable(fields, result, types)
+    return VirtualTable(fields, result, types, rowcount)
 
   def _Connect(self, args):
     log_args = args.copy()
@@ -731,11 +763,10 @@ class QueryConsumer(threading.Thread):
       log_args['passwd'] = 'XXXXXXX'
     logging.debug('Connecting with %s', log_args)
 
-    if 'dbtype' in args:
-      setup = self._DBTYPE_SETUP[args['dbtype']]
-      if setup:
-        setup(args)
-      del args['dbtype']  # MySQLdb doesn't like extra arguments.
+    setup = self._DBTYPE_SETUP[args['dbtype']]
+    if setup:
+      setup(args)
+    del args['dbtype']  # MySQLdb doesn't like extra arguments.
 
     self._dbh = MySQLdb.connect(**args)
     self._dbh.autocommit(True)
@@ -762,6 +793,11 @@ class Connection(_BaseConnection):
   """A connection to a single database host."""
 
   def __init__(self, **kwargs):
+    """Create a new connection.
+
+    At least "dbtype" is required in keyword arguments. Some others may be
+    required, depending on the specifics of the connection.
+    """
     _BaseConnection.__init__(self)
     self._consumer = QueryConsumer(**kwargs)
     self._consumer.start()
