@@ -16,6 +16,7 @@
 
 """Tools for advanced thread use in Python."""
 
+import functools
 import heapq
 import Queue
 import threading
@@ -255,3 +256,13 @@ class EventManager(object):
     self._threads.append(notification)
     self._Worker()
     notification.Notify()
+
+  def Partial(self, func, *args, **kwargs):
+    """Like functools.partial, but will run the callback in this EventManager.
+
+    Note that this makes the callback non-blocking.
+    """
+    callback = functools.partial(func, *args, **kwargs)
+    def Callback(*args2, **kwargs2):
+      self.Add(functools.partial(callback, *args2, **kwargs2))
+    return Callback
