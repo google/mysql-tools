@@ -22,6 +22,8 @@ import base64
 import getpass
 import hashlib
 import os
+import random
+import string
 
 try:
   from tlslite.utils import compat
@@ -29,6 +31,15 @@ try:
 except (ValueError, ImportError):
   from tlslite.tlslite.utils import compat
   from tlslite.tlslite.utils import keyfactory
+
+
+def GeneratePassword(passwd_length=9):
+  """Return a password of the appropriate length (default 9)."""
+  chars = list(set(string.printable) - set(string.whitespace))
+  password = ""
+  for _ in xrange(passwd_length):
+    password += random.choice(chars)
+  return password
 
 
 def HashPassword(plaintext):
