@@ -36,23 +36,26 @@ def FindDuplicateIndexes(dbh):
       'SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES')
 
   for table in tables:
-    indexes = dbh.ExecuteOrDie('SHOW INDEX FROM `%s`.`%s`' %
-                               (table['TABLE_SCHEMA'], table['TABLE_NAME']))
-    columns = {}
-    for index in indexes:
-      if index['Non_unique'] == 0:
-        # Skip unique indexes
-        continue
-      columns.setdefault(index['Key_name'], []).append(index['Column_name'])
+    index_columns = dbh.ExecuteOrDie('SHOW INDEX FROM `%s`.`%s`' %
+                                     (table['TABLE_SCHEMA'],
+                                      table['TABLE_NAME']))
+    indexes = {}
+    for column in index_columns:
+      index = indexes.setdefault(column['Key_name'], {})
+      index['unique'] = not bool(column['Non_unique'])
+      index.setdefault('columns', []).append(column['Column_name'])
 
-    for key_name1, column_list1 in columns.iteritems():
-      for key_name2, column_list2 in columns.iteritems():
+    for key_name1, index1 in indexes.iteritems():
+      if index1['unique']:
+        # We never suggest removal of unique indexes.
+        continue
+      for key_name2, index2 in indexes.iteritems():
         if key_name1 == key_name2:
           continue
-        if _ListStartsWith(column_list1, column_list2):
+        if _ListStartsWith(index2['columns'], index1['columns']):
           print '`%s`.`%s`: Key %s is a prefix of %s' % (
               table['TABLE_SCHEMA'], table['TABLE_NAME'],
-              key_name2, key_name1)
+              key_name1, key_name2)
 
 
 def main(argv):
