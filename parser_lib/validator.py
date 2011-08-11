@@ -98,6 +98,8 @@ class Validator(object):
     visitors = [
         ShardSetChecker(self._schema, string),
         AlterChecker(self._schema, string, max_alter_rows=max_alter_rows),
+        CreateDatabaseChecker(self._schema, string),
+        DropDatabaseChecker(self._schema, string),
         CreateTableChecker(self._schema, string,
                            allowed_engines=allowed_engines),
         DropTableChecker(self._schema, string),
@@ -380,6 +382,39 @@ class AlterChecker(Visitor):
                       'ENUM default value %r not in values: %r' % (
                           default_val[0], sql_values))
 
+class CreateDatabaseChecker(Visitor):
+  """Visitor to perform check on Create Database queries."""
+
+  def visit_query(self, tokens):
+    self.visit(tokens, running_scheme=tokens.get('running_scheme'))
+
+  def visit_create_database(self, tokens, running_scheme):
+    if running_scheme and self._GetDescendants(running_scheme, 'shard'):
+      self.AddError(tokens, 'CREATE should be run on all shards')
+    db = self._GetDescendants(tokens, 'database')[0][0]
+    try:
+      db = self._db_schema.FindDatabase(db)
+      self.AddError(tokens, 'Database %s already exists' % db)
+    except schema.UnknownNameException:
+      self._db_schema.AddDatabase(db)
+
+
+class DropDatabaseChecker(Visitor):
+  """Visitor to perform check on Drop Database queries."""
+
+  def visit_query(self, tokens):
+    self.visit(tokens, running_scheme=tokens.get('running_scheme'))
+
+  def visit_drop_database(self, tokens, running_scheme):
+    if running_scheme and self._GetDescendants(running_scheme, 'shard'):
+      self.AddError(tokens, 'DROP should be run on all shards')
+    db = self._GetDescendants(tokens, 'database')[0][0]
+    try:
+      found_db = self._db_schema.FindDatabase(db)
+      self._db_schema.DropDatabase(db)
+    except schema.UnknownNameException:
+      self.AddError(tokens, 'Database "%s" does not exist, cannot drop.' % db)
+
 
 class CreateTableChecker(Visitor):
   """Visitor to perform checks on CREATE queries."""
@@ -394,7 +429,7 @@ class CreateTableChecker(Visitor):
 
   def visit_create_table(self, tokens, running_scheme):
     if running_scheme and self._GetDescendants(running_scheme, 'shard'):
-      self.AddError(tokens, 'CREATE should be run in on all shards')
+      self.AddError(tokens, 'CREATE should be run on all shards')
 
     table_spec = self._GetDescendants(tokens, 'table_spec')[0]
     try:

@@ -231,8 +231,11 @@ class SQLParser(object):
   _IDENTIFIER = pyp.Group(pyp.Word(pyp.alphas, pyp.alphanums + '_$')
                           | pyp.QuotedString('`', multiline=True, escChar='\\'))
 
-  _STRING = (pyp.QuotedString('\'', multiline=True, escChar='\\')
-             | pyp.QuotedString('\"', multiline=True, escChar='\\'))
+  _CHARSET = '_' + pyp.Word(pyp.alphanums).setResultsName('character_set')
+
+  _STRING = (pyp.Optional(_CHARSET)
+             + (pyp.QuotedString('\'', multiline=True, escChar='\\')
+                | pyp.QuotedString('\"', multiline=True, escChar='\\')))
 
   _NUMBER = pyp.Word(pyp.nums)
 
@@ -549,11 +552,18 @@ class SQLParser(object):
                               ).setResultsName('drop_table')
 
   # CREATE DATABASE dbname
-  _CREATE_DATABASE_SQL = (pyp.Combine(_CREATE_TOKEN
-                                      + _DATABASE_TOKEN,
-                                      adjacent=False)
-                          + pyp.Optional(_CREATE_NO_OVERWRITE)
-                          + _IDENTIFIER)
+  _CREATE_DATABASE_SQL = pyp.Group(_CREATE_TOKEN
+                                   + _DATABASE_TOKEN
+                                   + pyp.Optional(_CREATE_NO_OVERWRITE)
+                                   + _DB_NAME
+                                   ).setResultsName('create_database')
+
+  # DROP DATABASE dbname
+  _DROP_DATABASE_SQL = pyp.Group(_DROP_TOKEN
+                                 + _DATABASE_TOKEN
+                                 + pyp.Optional(_IF_TOKEN + _EXISTS_TOKEN)
+                                 + _DB_NAME
+                                 ).setResultsName('drop_database')
 
   # CREATE INDEX idx ON table (column, ...)
   _CREATE_INDEX_SQL = (
@@ -934,6 +944,7 @@ class SQLParser(object):
                           | _START_TRANSACTION_SQL
                           | _END_TRANSACTION_SQL
                           | _CREATE_DATABASE_SQL
+                          | _DROP_DATABASE_SQL
                           | _CREATE_INDEX_SQL
                           | _SET_SQL
                           | _VERSIONED_COMMENT
