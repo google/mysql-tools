@@ -146,7 +146,6 @@ class SQLParser(object):
   _USING_TOKEN = pyp.CaselessKeyword('using')
   _STRAIGHT_JOIN_TOKEN = pyp.CaselessKeyword('straight_join')
 
-  _TYPE_TOKEN = pyp.CaselessKeyword('type')
   _ENGINE_TOKEN = pyp.CaselessKeyword('engine')
   _IF_TOKEN = pyp.CaselessKeyword('if').suppress()
   _EXISTS_TOKEN = pyp.CaselessKeyword('exists').suppress()
@@ -517,8 +516,7 @@ class SQLParser(object):
 
   # CREATE TABLE table options can come in any order.  There may be
   # zero or many of them
-  _TABLE_FLAGS = pyp.Group(_TYPE_TOKEN
-                           | _ENGINE_TOKEN
+  _TABLE_FLAGS = pyp.Group(_ENGINE_TOKEN
                            | (_DEFAULT_TOKEN + _CHARSET_TOKEN)
                            | _CHARSET_TOKEN
                            | (_CHARACTER_TOKEN + _SET_TOKEN)
