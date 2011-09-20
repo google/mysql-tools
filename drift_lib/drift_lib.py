@@ -192,20 +192,48 @@ class DbChecksummer(object):
     decisions.
     """
     # Get list of tables which need to be checksummed cross multiple databases.
-    sql_get_tables = ('SELECT table_schema, table_name, engine, table_rows, '
-                      'data_length FROM information_schema.tables '
-                      'WHERE lower(table_schema) != \'admin\'')
-    sql_get_tables = self.AddFilter(sql_get_tables, 'table_schema.table_name',
-                                    self._table_list, 'IN')
-    sql_get_tables = self.AddFilter(sql_get_tables, 'table_schema.table_name',
-                                    self._skip_tables, 'NOT IN')
-    sql_get_tables = self.AddFilter(sql_get_tables, 'table_schema',
-                                    self._databases_to_skip, 'NOT IN')
-    sql_get_tables = self.AddFilter(sql_get_tables, 'engine',
-                                    self._engine_list, 'IN')
+    # Filtering out tables without primary key in this level to avoid processing
+    # them further.
+    sql_get_tables = (
+        'SELECT DISTINCT '
+        't.table_schema, '
+        't.table_name, '
+        't.engine, '
+        't.table_rows, '
+        't.data_length '
+        'FROM '
+        'information_schema.tables t '
+        'JOIN information_schema.statistics s '
+        'ON t.table_schema = s.table_schema '
+        'AND '
+        't.table_name = s.table_name '
+        'WHERE '
+        'lower(t.table_schema) not in (\'admin\') '
+        'AND '
+        's.index_name = \'PRIMARY\'')
+    sql_get_tables = self.AddFilter(
+        sql_get_tables,
+        'CONCAT(t.table_schema, \'.\' , t.table_name)',
+        self._table_list,
+        'IN')
+    sql_get_tables = self.AddFilter(
+        sql_get_tables,
+        'CONCAT(t.table_schema, \'.\', t.table_name)',
+        self._skip_tables,
+        'NOT IN')
+    sql_get_tables = self.AddFilter(
+        sql_get_tables,
+        't.table_schema',
+        self._databases_to_skip,
+        'NOT IN')
+    sql_get_tables = self.AddFilter(
+        sql_get_tables,
+        't.engine',
+        self._engine_list,
+        'IN')
     if self._database_to_check:
-      sql_get_tables = '%s AND table_schema=\'%s\'' % (sql_get_tables,
-                                                       self._database_to_check)
+      sql_get_tables = '%s AND t.table_schema=\'%s\'' % (
+          sql_get_tables, self._database_to_check)
     table_stats = self._dbh.ExecuteOrDie(sql_get_tables)
 
     self._tables = []
@@ -265,8 +293,11 @@ class DbChecksummer(object):
       return False
     if not self._tables[self._position].ChecksumQuery():
       self._position += 1
+      while (self._position < len(self._tables) and not
+             self._tables[self._position].PrepareToChecksum()):
+        self._position += 1
+      # Make sure table ready to be checksummed, not out of position.
       if self._position < len(self._tables):
-        self._tables[self._position].PrepareToChecksum()
         self._current_table = self._tables[self._position]
     return True
 
@@ -351,9 +382,14 @@ class TableChecksummer(object):
     self._dbh = dbh
 
   def PrepareToChecksum(self):
-    """Call before making any calls to ChecksumQuery."""
+    """Call before making any calls to ChecksumQuery.
+
+    Returns:
+      True: If table is prepared and ready for checksum.
+      False: Id table is not able to be checksummed.
+    """
     if not self._InitQueryDict():
-      return
+      return False
     # If we need to start in the middle of the table, we get the starting
     # offsets from _query_dict['offset_copy'] (last query re-inserted).
     prev_offsets = self._query_dict.get('offset_copy', '')
@@ -369,6 +405,7 @@ class TableChecksummer(object):
     try:
       self._dbh.ExecuteOrDie(
           TableChecksummer.INITIALIZATION_QUERY % self._query_dict)
+      return True
     except Exception, e:
       logging.exception(e)
       raise AdminTablesMissing(str(e))
@@ -535,7 +572,7 @@ REPLACE INTO %(result_table)s
 Offsets, Checksums, Count)
 SELECT '%(db_name)s', '%(table)s', %(chunk)s, '%(job_started)s',
 NOW(), %(offsets)s, %(checksums)s, @count := count(*)
-FROM (SELECT * FROM %(table)s FORCE INDEX (PRIMARY)
+FROM (SELECT * FROM %(db_name)s.%(table)s FORCE INDEX (PRIMARY)
 WHERE %(where)s
 ORDER BY %(primary_key)s
 LIMIT %(batch_size)s) f
