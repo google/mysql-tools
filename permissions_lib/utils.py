@@ -42,6 +42,10 @@ def GeneratePassword(passwd_length=9):
   return password
 
 
+def GeneratePasswordInteractive():
+  print GeneratePassword()
+
+
 def HashPassword(plaintext):
   """Generate a MySQL password hash from a string."""
   hashobj = hashlib.sha1(hashlib.sha1(plaintext).digest())

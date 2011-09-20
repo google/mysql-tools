@@ -57,6 +57,8 @@ maintain your permissions file:
   generate-key
     Generate encryption keys and write them to --public_keyfile and
     --private_keyfile.
+  generate-password
+    Generate a random password.
 """
 
 __author__ = 'flamingcow@google.com (Ian Gulliver)'
@@ -96,6 +98,7 @@ _COMMANDS = {'decrypt-hash':     utils.DecryptHashInteractive,
              'encrypt-hash':     utils.EncryptHashInteractive,
              'encrypt-password': utils.EncryptPasswordInteractive,
              'generate-key':     utils.GenerateKey,
+             'generate-password':utils.GeneratePasswordInteractive,
              'hash-password':    utils.HashPasswordInteractive,
              'copy':             use.Copy,
              'dump':             use.PermissionsFile.Dump,
