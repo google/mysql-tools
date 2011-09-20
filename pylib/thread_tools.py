@@ -18,6 +18,7 @@
 
 import functools
 import heapq
+import logging
 import Queue
 import threading
 import time
@@ -57,25 +58,39 @@ class Notification(object):
 class BlockingCallback(object):
   """Encapsulate a callback while allowing blocking until it completes."""
 
-  def __init__(self, callback):
+  def __init__(self, callback, num_calls=1):
+    """Constructor.
+
+    It is an error to call the return value more than num_calls times.
+
+    Args:
+      callback: Function to call after we've been called num_calls times.
+      num_calls: Number of calls to wait for.
+
+    Returns:
+      An object that is also callable.
+    """
     self._callback = callback
+    self._calls_remaining = num_calls
+    self._lock = threading.Lock()
     self._notification = Notification()
-    self._semaphore = threading.Semaphore(0)
 
   def __call__(self, *args, **kwargs):
-    ret = self._callback(*args, **kwargs)
-    self._semaphore.release()
-    if not self._notification.HasBeenNotified():
-      self._notification.Notify()
+    """Make this object magically callable."""
+    with self._lock:
+      self._calls_remaining -= 1
+      if self._calls_remaining > 0:
+        return
+      assert self._calls_remaining == 0
+    ret = None
+    if self._callback:
+      ret = self._callback(*args, **kwargs)
+    self._notification.Notify()
     return ret
 
   def Wait(self):
+    """Block until called num_calls times and the callback completes."""
     self._notification.WaitForNotification()
-
-  def WaitForNum(self, num):
-    """Wait for the callback to be called num times."""
-    for _ in xrange(num):
-      self._semaphore.acquire()
 
 
 class CancellableCallback(object):
@@ -101,6 +116,7 @@ def ReturnOnReferenceError(func):
     try:
       func(*args, **kwargs)
     except ReferenceError:
+      logging.exception('Reference went bad; returning')
       return
   return wrapper
 
@@ -126,30 +142,26 @@ class EventManager(object):
   _scheduler = None
 
   def __init__(self, num_threads, max_queue_size=0):
-    """Initialize and start worker threads.
+    """Initialize.
 
     Args:
-      num_threads: See Start().
+      num_threads: Number of threads to start, not including donated threads.
       max_queue_size: Maximum number of tasks pending ASAP execution, before
         Add() blocks and scheduling becomes unreliable.
     """
+    self._num_threads = num_threads
     self._threads = []
     # Expects callback in queue.
     self._run_queue = Queue.Queue(max_queue_size)
     # Expects (time_to_run, callback) in queue.
     self._schedule_queue = Queue.Queue()
     self._shutdown_lock = threading.Lock()
-    self.Start(num_threads)
 
   def __del__(self):
     self.Shutdown()
 
-  def Start(self, num_threads):
-    """Start all worker threads.
-
-    Args:
-      num_threads: Number of threads to start, not including donated threads.
-    """
+  def Start(self):
+    """Start all worker threads."""
     assert not self._threads, 'EventManager started when already running.'
     self._shutdown = False
     # Threads get weak references to the instance so they don't block
@@ -160,7 +172,7 @@ class EventManager(object):
     self._scheduler = threading.Thread(target=EventManager._Scheduler,
                                        args=(weakself,))
     self._scheduler.start()
-    for _ in xrange(num_threads):
+    for _ in xrange(self._num_threads):
       t = threading.Thread(target=EventManager._Worker, args=(weakself,))
       t.start()
       self._threads.append(t)
@@ -205,11 +217,16 @@ class EventManager(object):
   @ReturnOnReferenceError
   def _Worker(self):
     """Worker thread main function."""
+    logging.info('Worker thread starting')
     while True:
       callback = self._run_queue.get(True)
       if self._shutdown:
+        logging.info('Worker thread shutting down')
         break
-      callback()
+      try:
+        callback()
+      except Exception:
+        logging.exception('Exception inside %s', callback)
 
   @ReturnOnReferenceError
   def _Scheduler(self):
