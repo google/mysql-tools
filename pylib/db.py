@@ -1,6 +1,6 @@
 #!/usr/bin/python2.6
 #
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -49,6 +49,7 @@ import Queue
 import random
 import re
 import socket
+import sys
 import threading
 import time
 import traceback
@@ -56,6 +57,7 @@ import traceback
 import thread_tools
 
 import MySQLdb
+from MySQLdb import converters
 
 
 class Error(Exception):
@@ -82,6 +84,11 @@ class QueryWarningsException(Error):
   pass
 
 
+def GetDefaultConversions():
+  """Return a copy of the default value conversion dict."""
+  return converters.conversions.copy()
+
+
 class Spec(dict):
   """Represent a database specification.
 
@@ -90,7 +97,7 @@ class Spec(dict):
 
   # Valid DB types (first part of a 5-part dbspec)
   _DB_TYPES = [
-      'mysql',
+      'mysql'
   ]
 
   _DEFAULT_DB_TYPE = 'mysql'
@@ -156,6 +163,8 @@ class Spec(dict):
         'port' - Port number to connect to at the host. (optional)
         'charset' - Character set for both directions of the connection.
           (optional, defaults to utf8)
+        'conv' - Dictionary of python type or MySQL type constant to conversion
+          function (optional, defaults to GetDefaultConversions())
     """
     args.setdefault('dbtype', self._DEFAULT_DB_TYPE)
     assert args['dbtype'] in self._DB_TYPES, (
@@ -170,7 +179,7 @@ class Spec(dict):
       self['host'] = 'localhost'
 
     # Handle special password syntax
-    if self.get('passwd', '?') in ('', '?'):
+    if self.get('passwd', '?') in ('', '?') and sys.stdin.isatty():
       userhost = (self['user'], self['host'])
       if userhost not in self._PW_CACHE:
         self._PW_CACHE[userhost] = getpass.getpass(
@@ -185,6 +194,14 @@ class Spec(dict):
     """Returns the dbspec string for this instance, sans password."""
     result = '%s:%s:%s:*:%s' % (self['dbtype'], self['host'], self['user'],
                                 self['db'])
+    if self.get('port'):
+      result += ':%d' % self.get('port')
+    return result
+
+  def StringWithPasswd(self):
+    """Returns the dbspec string for this instance with the password."""
+    result = '%s:%s:%s:%s:%s' % (self['dbtype'], self['host'], self['user'],
+                                 self['passwd'], self['db'])
     if self.get('port'):
       result += ':%d' % self.get('port')
     return result
@@ -352,7 +369,6 @@ class VirtualTable(object):
 
     header = 'INSERT INTO %s (%s) VALUES ' % (
         table_name, ','.join(self._fields))
-    statements = []
     statement_parts = [header]
     statement_len = 0
     for row in self._result:
