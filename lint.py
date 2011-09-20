@@ -57,6 +57,23 @@ def FindDuplicateIndexes(dbh):
               table['TABLE_SCHEMA'], table['TABLE_NAME'],
               key_name1, key_name2)
 
+    if 'PRIMARY' in indexes and len(indexes['PRIMARY']['columns']) == 1:
+      # Single-column primary index. Validate type.
+      column_info = dbh.ExecuteOrDie(
+          "SHOW COLUMNS FROM `%s`.`%s` LIKE %%(column)s" %
+          (table['TABLE_SCHEMA'],
+           table['TABLE_NAME']),
+          {'column': indexes['PRIMARY']['columns'][0]})
+      if column_info[0]['Null'] == 'YES':
+        print '`%s`.`%s`: ID column %s is nullable' % (
+            table['TABLE_SCHEMA'], table['TABLE_NAME'],
+            column_info[0]['Field'])
+      if column_info[0]['Type'] not in ('bigint(20)',
+                                        'bigint(20) unsigned'):
+        print '`%s`.`%s`: ID column %s has invalid type: %s' % (
+            table['TABLE_SCHEMA'], table['TABLE_NAME'],
+            column_info[0]['Field'], column_info[0]['Type'])
+
 
 def main(argv):
   assert FLAGS.db, 'Please pass --db'
