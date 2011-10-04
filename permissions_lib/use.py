@@ -27,6 +27,12 @@ __author__ = 'flamingcow@google.com (Ian Gulliver)'
 __docformat__ = 'epytext en'
 
 import logging
+import threading
+
+try:
+  from pylib import db
+except ImportError:
+  from ..pylib import db
 
 import define
 import utils
@@ -74,44 +80,37 @@ def Copy(dbh, set_name):
     dbh: A connected database handle (pylib.db).
     set_name: The permissions set name, e.g. "primary", "secondary".
   """
-  dbh.ExecuteOrDie('BEGIN')
-  # Mutex locking against parallel copies.
-  dbh.ExecuteOrDie(
-      'SELECT 1 FROM adminlocal.LocalMysqlPermissionState FOR UPDATE')
-  try:
-    result = dbh.ExecuteOrDie(
-        'SELECT MysqlPermissionSetId,'
-        ' UNIX_TIMESTAMP(LastUpdated) AS LastUpdated'
-        ' FROM admin.MysqlPermissionSets'
-        ' WHERE PermissionSetLabel=%(set_label)s;', {'set_label': set_name})
-    set_id = result[0]['MysqlPermissionSetId']
-    last_updated = result[0]['LastUpdated']
+  with db.Lock(dbh, 'permissions copy'):
+    with db.Transaction(dbh) as trx:
+      result = dbh.ExecuteOrDie(
+          'SELECT MysqlPermissionSetId,'
+          ' UNIX_TIMESTAMP(LastUpdated) AS LastUpdated'
+          ' FROM admin.MysqlPermissionSets'
+          ' WHERE PermissionSetLabel=%(set_label)s;', {'set_label': set_name})
+      set_id = result[0]['MysqlPermissionSetId']
+      last_updated = result[0]['LastUpdated']
 
-    result = dbh.ExecuteOrDie(
-        'SELECT COUNT(*) AS c FROM admin.MysqlPermissionsUser'
-        ' WHERE MysqlPermissionSetId=%(set_id)s', {'set_id': set_id})
-    if not result[0]['c']:
-      logging.fatal('Permissions copy with blank user table; aborting.')
+      result = dbh.ExecuteOrDie(
+          'SELECT COUNT(*) AS c FROM admin.MysqlPermissionsUser'
+          ' WHERE MysqlPermissionSetId=%(set_id)s', {'set_id': set_id})
+      assert result[0]['c'], 'Permissions copy with blank user table'
 
-    for dest, source in COPY_MAP.iteritems():
-      result = dbh.ExecuteOrDie('DESC %s' % dest)
-      columns = [row['Field'] for row in result]
-      columns_str = ','.join(columns)
-      dbh.ExecuteOrDie('DELETE FROM %s' % dest)
-      dbh.ExecuteOrDie('INSERT INTO %s SELECT %s FROM %s '
-                       ' WHERE MysqlPermissionSetId=%s' % (
-                           dest, columns_str, source, set_id))
+      for dest, source in COPY_MAP.iteritems():
+        result = dbh.ExecuteOrDie('DESC %s' % dest)
+        columns = [row['Field'] for row in result]
+        columns_str = ','.join(columns)
+        dbh.ExecuteOrDie('DELETE FROM %s' % dest)
+        dbh.ExecuteOrDie('INSERT INTO %s SELECT %s FROM %s'
+                         ' WHERE MysqlPermissionSetId=%s' % (
+                             dest, columns_str, source, set_id))
 
-    dbh.ExecuteOrDie('DELETE FROM adminlocal.LocalMysqlPermissionState')
-    dbh.ExecuteOrDie('INSERT INTO adminlocal.LocalMysqlPermissionState SET'
-                     ' MysqlPermissionSetId=%(set_id)s, '
-                     ' LastPushed=FROM_UNIXTIME(%(last_pushed)s)',
-                     {'set_id': set_id,
-                      'last_pushed': last_updated})
-    dbh.ExecuteOrDie('COMMIT')
+      dbh.ExecuteOrDie('DELETE FROM adminlocal.LocalMysqlPermissionState')
+      dbh.ExecuteOrDie('INSERT INTO adminlocal.LocalMysqlPermissionState SET'
+                       ' MysqlPermissionSetId=%(set_id)s,'
+                       ' LastPushed=FROM_UNIXTIME(%(last_pushed)s)',
+                       {'set_id': set_id,
+                        'last_pushed': last_updated})
     dbh.ExecuteOrDie('FLUSH LOCAL PRIVILEGES')
-  finally:
-    dbh.ExecuteOrDie('ROLLBACK')
 
 
 def GetPermissionSetId(dbh, set_name):
@@ -136,12 +135,10 @@ def MarkPermissionsChanged(dbh, set_id, push_duration=1800):
 class PermissionsFile(object):
   """Represent permissions definitions."""
 
+  _lock = threading.Lock()
+
   def __init__(self, permissions_contents, private_keyfile=None):
     """Load the permissions definitions.
-
-    TODO(flamingcow): There is a race when instantiating two instances of
-    PermissionsFile at once. We need a better way to return values from
-    define.py than a global.
 
     Args:
       permissions_contents: string containing Python code that defines
@@ -149,13 +146,18 @@ class PermissionsFile(object):
       private_keyfile: Path to a file containing the private RSA key to be
         used to decrypt encrypted_hash values from permissions_contents.
     """
-    self.globals = define.__dict__
-    # Reset define's global state. This makes multiple instantiations of
-    # PermissionsFile work.
-    self.globals['SETS'].clear()
     code = compile(permissions_contents, 'permissions contents', 'exec')
-    exec(code, self.globals)
-    self._sets = self.globals['SETS'].copy()
+
+    # TODO(flamingcow): There is a race when instantiating two instances of
+    # PermissionsFile at once. We need a better way to return values from
+    # define.py than a global.
+    with self._lock:
+      self.globals = define.__dict__
+      # Reset define's global state. This makes multiple instantiations of
+      # PermissionsFile work.
+      self.globals['SETS'].clear()
+      exec(code, self.globals)
+      self._sets = self.globals['SETS'].copy()
     if private_keyfile:
       self._decryption_key = utils.PrivateKeyFromFile(private_keyfile)
     else:
