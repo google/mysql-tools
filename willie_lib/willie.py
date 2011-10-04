@@ -95,11 +95,3 @@ class Willie(object):
           return
       else:
         return
-
-
-def main(argv):
-  pass
-
-
-if __name__ == '__main__':
-  app.run()
