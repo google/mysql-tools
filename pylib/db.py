@@ -46,6 +46,7 @@ import getpass
 import logging
 import os
 import Queue
+import pprint
 import random
 import re
 import socket
@@ -53,6 +54,7 @@ import sys
 import threading
 import time
 import traceback
+import weakref
 
 import thread_tools
 
@@ -84,9 +86,20 @@ class QueryWarningsException(Error):
   pass
 
 
+class Timeout(Error):
+  pass
+
+
+class LockLost(Error):
+  pass
+
+
 def GetDefaultConversions():
   """Return a copy of the default value conversion dict."""
   return converters.conversions.copy()
+
+
+CONNECTIONS = set()
 
 
 class Spec(dict):
@@ -462,19 +475,25 @@ class Operation(object):
 class _BaseConnection(object):
   """Common methods for connection objects."""
 
-  def __init__(self):
-    self._closed = False
+  def __init__(self, **kwargs):
+    self._closed = True
     # We strip the last 2 frames (one for BaseConnection and one for the
     # implementation class constructor).
-    self._creation = ''.join(traceback.format_stack()[:-2])
+    self._creation = [x.rstrip() for x in traceback.format_stack()[:-2]]
+    self._args = kwargs
+    if 'passwd' in self._args:
+      self._args['passwd'] = '******'
     self._cache = {}
+    self._weakref = weakref.ref(self)
+    CONNECTIONS.add(self._weakref)
 
   def __del__(self):
     """Destructor."""
     if not self._closed:
       logging.error('Implicitly closed database handle, created here:\n%s',
-                    self._creation)
+                    '\n'.join(self._creation))
     self.Close()
+    CONNECTIONS.remove(self._weakref)
 
   def __enter__(self):
     """'with' keyword begins."""
@@ -483,6 +502,18 @@ class _BaseConnection(object):
   def __exit__(self, type, value, traceback):
     """'with' keyword ends."""
     self.Close()
+
+  def __str__(self):
+    return '\n'.join([
+        str(self.__class__),
+        '  Status:',
+        '    ' + {True: 'closed', False: 'open'}[self._closed],
+        '  Arguments:',
+        '    ' + pprint.pformat(self._args).replace('\n', '\n    '),
+        '  Created at:',
+        '    ' + '\n    '.join(self._creation),
+        '=' * 80,
+    ])
 
   @staticmethod
   def Escape(value):
@@ -551,6 +582,7 @@ class _BaseConnection(object):
     """
     if params:
       query %= dict(zip(params.keys(), map(self.Escape, params.values())))
+    self._closed = False
     op = self.Submit(query)
     return self.Wait(op)
 
@@ -814,7 +846,7 @@ class Connection(_BaseConnection):
     At least "dbtype" is required in keyword arguments. Some others may be
     required, depending on the specifics of the connection.
     """
-    _BaseConnection.__init__(self)
+    _BaseConnection.__init__(self, **kwargs)
     self._consumer = QueryConsumer(**kwargs)
     self._consumer.start()
 
@@ -867,10 +899,10 @@ class MultiConnection(_BaseConnection):
                          re.IGNORECASE | re.DOTALL | re.MULTILINE)
 
   def __init__(self, **kwargs):
-    _BaseConnection.__init__(self)
-    self._dbargs = Spec(**kwargs)
+    _BaseConnection.__init__(self, **kwargs)
+    spec_template = Spec(**kwargs)
     self._connections = {}
-    for i, spec in enumerate(self._dbargs):
+    for i, spec in enumerate(spec_template):
       # Make a copy before we add to it, in case the list is shared across
       # specs.
       spec['execute_on_connect'] = list(spec.get('execute_on_connect', []) +
@@ -1159,3 +1191,75 @@ def XCombineSQL(lines):
       statement = '\n'.join(buf).strip()
       buf = []
       yield statement
+
+
+class Lock(object):
+  """Pythonic wrapper for a named database lock.
+
+  WARNING: This lock has very odd behavior. You can acquire multiple times from
+  the same database connection, but still only release once. This means that:
+
+  with db.Lock(dbh, 'foo'):
+    with db.Lock(dbh, 'foo'):
+      pass
+    # Code here will be running without the lock
+  # LostLock will be thrown when the outer "with" exits
+  """
+
+  def __init__(self, dbh, name, seconds_to_wait=999999):
+    self._dbh = dbh
+    self._name = name
+    self._seconds_to_wait = seconds_to_wait
+
+  def __enter__(self):
+    result = self._dbh.ExecuteOrDie(
+        'SELECT GET_LOCK(%(name)s, %(seconds_to_wait)s) AS l', {
+            'name': self._name,
+            'seconds_to_wait': self._seconds_to_wait,
+         })
+    if result[0]['l'] != 1:
+      if result[0]['l'] == 0:
+        raise Timeout('Failed to get named lock "%s"' % self._name)
+      else:
+        raise Error('Error acquiring lock "%s"' % self._name)
+    return self
+
+  def __exit__(self, type, value, traceback):
+    result = self._dbh.ExecuteOrDie(
+        'SELECT RELEASE_LOCK(%(name)s) AS l', {
+            'name': self._name,
+         })
+    if result[0]['l'] != 1:
+      raise LockLost('Lock "%s" lost while holding' % self._name)
+
+
+class Transaction(object):
+  """Pythonic wrapper for a database transaction.
+
+  Example use:
+    with db.Transaction(dbh):
+      # operate on database
+
+  WARNING: Do not nest transaction objects. Creation of the inner object will
+  implicitly commit the outer one, i.e.:
+
+  with db.Transaction(dbh):
+    # outer transaction only
+    with db.Transaction(dbh):
+      # statements from outer transaction implicitly committed
+      # inside inner transaction only
+    # outside of any transaction
+  """
+
+  def __init__(self, dbh):
+    self._dbh = dbh
+
+  def __enter__(self):
+    self._dbh.ExecuteOrDie('BEGIN')
+    return self
+
+  def __exit__(self, type, value, traceback):
+    if value:
+      self._dbh.ExecuteOrDie('ROLLBACK')
+    else:
+      self._dbh.ExecuteOrDie('COMMIT')
