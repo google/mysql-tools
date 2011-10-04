@@ -370,17 +370,18 @@ class _BasePermission(object):
     """Check if this child contains no useful content."""
     return not(self._negative_privs or self._positive_privs or self._children)
 
-  def PullUpPrivileges(self):
+  def PullUpPrivileges(self, inherited=0):
     """Remove spurious positive privileges from children.
 
     If children have no negative privileges and have positive privileges
     completely covered by my positive privileges, then the children are
     meaningless: remove them.
     """
+    inherited |= self._positive_privs
     for name, child in self._children.items():
-      child.PullUpPrivileges()
+      child.PullUpPrivileges(inherited)
       privs = child.PrivilegesForPullUp()
-      child.SoftRevokePrivileges(self._positive_privs & privs)
+      child.SoftRevokePrivileges(inherited & privs)
       if child.IsEmpty():
         del self._children[name]
 
