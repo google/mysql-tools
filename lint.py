@@ -31,6 +31,17 @@ def _ListStartsWith(superset, subset):
   return superset[:len(subset)] == subset
 
 
+def FindNonTransactionalTables(dbh):
+  tables = dbh.ExecuteOrDie(
+      "SELECT TABLE_SCHEMA, TABLE_NAME, ENGINE FROM INFORMATION_SCHEMA.TABLES"
+      " WHERE TABLE_SCHEMA NOT IN ('mysql', 'information_schema')"
+      " AND ENGINE IN ('MyISAM')")
+
+  for table in tables:
+    print '`%s`.`%s`: Non-transactional engine %s' % (
+        table['TABLE_SCHEMA'], table['TABLE_NAME'], table['ENGINE'])
+
+
 def FindDuplicateIndexes(dbh):
   tables = dbh.ExecuteOrDie(
       'SELECT TABLE_SCHEMA, TABLE_NAME FROM INFORMATION_SCHEMA.TABLES')
@@ -80,6 +91,7 @@ def main(argv):
 
   with db.Connect(FLAGS.db) as dbh:
     FindDuplicateIndexes(dbh)
+    FindNonTransactionalTables(dbh)
 
 
 if __name__ == '__main__':
