@@ -19,11 +19,11 @@
   validate.py FILENAME...
 """
 
-from parser_lib import schema
 from parser_lib import validator
 from pylib import app
 from pylib import db
 from pylib import flags
+from pylib import schema
 
 FLAGS = flags.FLAGS
 
