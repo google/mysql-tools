@@ -33,8 +33,8 @@ except (ValueError, ImportError):
   from tlslite.tlslite.utils import keyfactory
 
 
-def GeneratePassword(passwd_length=9):
-  """Return a password of the appropriate length (default 9)."""
+def GeneratePassword(passwd_length=12):
+  """Return a password of the appropriate length (default 12)."""
   chars = list(set(string.printable) - set(string.whitespace))
   password = ""
   for _ in xrange(passwd_length):
