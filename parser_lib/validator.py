@@ -35,7 +35,11 @@ import pyparsing as pyp
 import traceback
 
 import parser
-import schema
+
+try:
+  from pylib import schema
+except ImportError:
+  from ..pylib import schema
 
 
 class Error(Exception): pass
@@ -77,10 +81,20 @@ def OnlyIfDescendedFrom(tag_names):
 class Validator(object):
   """Validate a set of parsed SQL statements."""
 
-  def __init__(self, db_schema=None):
+  def __init__(self, db_schema=None, progress_callback=None):
+    """Constructor.
+
+    Args:
+      db_schema: Instance of schema.Schema for fetching existing schema and
+        storing local mutations.
+      progress_callback: Called with character location after each statement is
+        validated.
+    """
     self._schema = db_schema or schema.Schema()
+    self._callback = progress_callback
     self._errors = []
     self._warnings = []
+    self._loc = 0
 
   def ValidateTree(self, queries, string=None, additional_visitors=(),
                    max_alter_rows=100000, # for AlterChecker
@@ -115,8 +129,11 @@ class Validator(object):
       logging.debug('Visiting: %s', query)
       for visitor in visitors:
         visitor.visit([query])
+      if self._callback:
+        self._callback(self._loc)
 
     for visitor in visitors:
+      visitor.Finalize()
       self._errors.extend(visitor.Errors())
       self._warnings.extend(visitor.Warnings())
 
@@ -128,10 +145,13 @@ class Validator(object):
   def Warnings(self):
     return self._warnings
 
+  def _OnParseStatement(self, loc):
+    self._loc = loc
+
   def ValidateString(self, string, parser_class=parser.GoogleSQLParser,
                      **kwargs):
     """Parse a string and validate."""
-    schemaparser = parser_class()
+    schemaparser = parser_class(progress_callback=self._OnParseStatement)
     tokens = schemaparser.ParseString(string)
     return self.ValidateTree(tokens, string, **kwargs)
 
@@ -200,7 +220,7 @@ class Visitor(object):
 
   def AddError(self, token, msg):
     """Mark that an error has been detected in the input."""
-    if token.loc:
+    if token and token.loc:
       ex = ValidationError(token.loc,
                            pyp.lineno(token.loc, self._parsed_str),
                            pyp.col(token.loc, self._parsed_str),
@@ -228,6 +248,10 @@ class Visitor(object):
 
   def Warnings(self):
     return self._warnings
+
+  def Finalize(self):
+    """Do any checks that need to occur at the end of a file."""
+    pass
 
 
 class ShardSetChecker(Visitor):
@@ -265,8 +289,12 @@ class ShardSetChecker(Visitor):
     if running_scheme:
       shards = self._GetDescendants(running_scheme, 'shard')
       if shards:
-        return list(shards)
+        return list(shards[0])
     return self._TXN_PARALLEL
+
+  def Finalize(self):
+    if self._in_transaction:
+      self.AddError(None, 'Transaction open at end of file')
 
 
 class AlterChecker(Visitor):

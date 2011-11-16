@@ -58,13 +58,22 @@ class SQLParser(object):
   def _LogFailure(instring, start, expr, err):
     logging.debug('Failure: expr: %s, err: %s', expr.name, err)
 
-  def __init__(self):
+  def __init__(self, progress_callback=None):
+    """Constructor.
+
+    Args:
+      progress_callback: If specified, called with the character location of
+        the end of the last-yielded statement.
+    """
     # Get all the class variables that matches _*_TOKEN
     keywords = list(SQLParser.__dict__[k]
                     for k in SQLParser.__dict__
                     if re.match(r'^_([_\w])+_TOKEN$', k))
     # Fill the grammar rule _KEYWORDS with all the keywords possible
     SQLParser.__dict__['_KEYWORDS'] << pyp.MatchFirst(keywords)
+
+    self._loc = 0
+    self._callback = progress_callback
 
     for key in dir(self):
       grammar_rule = getattr(self, key)
@@ -73,11 +82,17 @@ class SQLParser(object):
         grammar_rule.setDebugActions(
             self._LogStart, self._LogSuccess, self._LogFailure)
 
+  def _OnNewLine(self, loc):
+    self._loc = loc
+
   def ParseString(self, string):
     logging.debug('Parsing: %r', string)
     try:
-      for statement in db.XCombineSQL(db.XSplit(string, '\n')):
+      for statement in db.XCombineSQL(db.XSplit(string, '\n',
+                                                callback=self._OnNewLine)):
         yield self._QUERY.parseString(statement)[0]
+        if self._callback:
+          self._callback(self._loc)
     except pyp.ParseException, e:
       raise ParseError(e)
 
@@ -907,13 +922,13 @@ class SQLParser(object):
                                 ).setResultsName('delete')
 
   # TRANSACTIONS
-  _START_TRANSACTION_SQL = ((_START_TOKEN + _TRANSACTION_TOKEN)
-                            | _BEGIN_TOKEN
-                            ).setResultsName('start_transaction')
+  _START_TRANSACTION_SQL = pyp.Group((_START_TOKEN + _TRANSACTION_TOKEN)
+                                     | _BEGIN_TOKEN
+                                     ).setResultsName('start_transaction')
 
-  _END_TRANSACTION_SQL = (_COMMIT_TOKEN
-                          | _ROLLBACK_TOKEN
-                          ).setResultsName('end_transaction')
+  _END_TRANSACTION_SQL = pyp.Group(_COMMIT_TOKEN
+                                   | _ROLLBACK_TOKEN
+                                   ).setResultsName('end_transaction')
 
   # UNSUPPORTED QUERIES
 
