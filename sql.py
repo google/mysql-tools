@@ -44,11 +44,18 @@ from pylib import flags
 
 FLAGS = flags.FLAGS
 
-flags.DEFINE_string('charset', 'utf-8', 'Input/output character set')
-
+flags.DEFINE_string('charset', 'utf8', 'Input/output character set')
+flags.DEFINE_string('prompt', None, 'Custom prompt instead of the dbspec')
 
 _CSV_RE = re.compile('^\s*CSV\s+(?P<query>.*)$',
                      re.IGNORECASE | re.DOTALL | re.MULTILINE)
+
+
+def _Encode(value):
+  if isinstance(value, unicode):
+    return value.encode(FLAGS.charset)
+  else:
+    return value
 
 
 def Execute(dbh, query):
@@ -61,18 +68,30 @@ def Execute(dbh, query):
   if csvh:
     csvh.writerow(results.values()[0].GetFields())
     for host, result in results.iteritems():
-      csvh.writerows(result.GetRows())
+      for row in result.GetRows():
+        fields = []
+        for field in row:
+          if isinstance(field, unicode):
+            fields.append(field.encode(FLAGS.charset))
+          else:
+            fields.append(field)
+        csvh.writerow(fields)
     return
   by_result = {}
   for name, result in results.iteritems():
     by_result.setdefault(result, []).append(name)
   if len(by_result) > 1:
     for result, names in by_result.iteritems():
+      if not result:
+        continue
       names.sort()
-      print '%s:\n%s' % (names, unicode(result).encode(FLAGS.charset))
+      print '%s:' % names
+      for row in result.GetTable():
+        print _Encode(row)
   else:
     if result:
-      print unicode(result).encode(FLAGS.charset)
+      for row in result.GetTable():
+        print _Encode(row)
 
 
 def GetLines(prompt):
@@ -96,11 +115,14 @@ def main(argv):
     pass
 
   if sys.stdin.isatty():
-    prompt = '%s> ' % argv[1]
+    if FLAGS.prompt:
+      prompt = '%s> ' % FLAGS.prompt
+    else:
+      prompt = '%s> ' % argv[1]
   else:
     prompt = ''
 
-  with db.Connect(argv[1]) as dbh:
+  with db.Connect(argv[1], charset=FLAGS.charset) as dbh:
     for statement in db.XCombineSQL(GetLines(prompt)):
       Execute(dbh, statement)
 
