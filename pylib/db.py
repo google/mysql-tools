@@ -42,6 +42,7 @@ cb.Execute('ON SHARD 3,5 SELECT foo FROM bar')
 
 __author__ = 'flamingcow@google.com (Ian Gulliver)'
 
+import decimal
 import getpass
 import logging
 import os
@@ -55,8 +56,6 @@ import threading
 import time
 import traceback
 import weakref
-
-import thread_tools
 
 import MySQLdb
 from MySQLdb import converters
@@ -270,18 +269,16 @@ class VirtualTable(object):
 
   _contents = 'Rows'
 
-  def __init__(self, fields, result, types=None, rowcount=None):
+  def __init__(self, fields, result, rowcount=None):
     """Constructor.
 
     Args:
       fields: A list of field names
       result: A list of lists of rows with cell data
-      types: A list of python type classes for fields
       rowcount: Number of rows affected by the query. Ignored if result
                 is non-empty.
     """
     self._fields = fields
-    self._types = types or []
     self._result = []
     self._rowcount = rowcount
     for row in result:
@@ -308,6 +305,35 @@ class VirtualTable(object):
       rows.append('\n'.join(fields))
     return '%s returned: %d\n*****\n%s\n' % (
         self._contents, len(self._result), '\n*****\n'.join(rows))
+
+  def __sub__(self, y):
+    y_hashes = set(hash(tuple(row)) for row in y.GetRows())
+    new = VirtualTable(self.GetFields(), [])
+    for row in self.GetRows():
+      if hash(tuple(row)) not in y_hashes:
+        new.Append(row)
+    return new
+
+  def GetTable(self):
+    """Generates formatted rows of an output table with fixed-width columns."""
+    widths = [max([len('%s' % row[i]) for row in self._result]
+                  + [len(self._fields[i])])
+              for i in xrange(len(self._fields))]
+    fmts = {
+        int: '%%%ds',
+        long: '%%%ds',
+        float: '%%%ds',
+        decimal.Decimal: '%%%ds',
+    }
+    if self._result:
+      types = [type(field) for field in self._result[0]]
+    else:
+      types = [str] * len(widths)
+    fmt = ' '.join(fmts.get(types[i], '%%-%ds') % width
+                   for i, width in enumerate(widths))
+    yield fmt % tuple(self._fields)
+    for row in self._result:
+      yield fmt % tuple(row)
 
   def __hash__(self):
     """Ordered hash of field names and unordered hash of rows."""
@@ -349,10 +375,6 @@ class VirtualTable(object):
       A list of lists containing cell data.
     """
     return self._result
-
-  def GetTypes(self):
-    """Get the list of Python types for fields."""
-    return self._types
 
   def GetRowsAffected(self):
     """Get the number of rows affected by the query.
@@ -447,7 +469,7 @@ class Operation(object):
 
   def __init__(self, args):
     self._args = args
-    self._notification = thread_tools.Notification()
+    self._event = threading.Event()
     self._result = None
     self._canceled = False
 
@@ -456,14 +478,14 @@ class Operation(object):
 
   def SetDone(self, result):
     self._result = result
-    self._notification.Notify()
+    self._event.set()
 
   def Wait(self):
-    self._notification.WaitForNotification()
+    self._event.wait()
     return self._result
 
   def TryWait(self):
-    return self._notification.HasBeenNotified()
+    return self._event.is_set()
 
   def MarkCanceled(self):
     self._canceled = True
@@ -518,11 +540,7 @@ class _BaseConnection(object):
   @staticmethod
   def Escape(value):
     """Escape MySQL characters in a value and wrap in quotes."""
-    if isinstance(value, str):
-      # Don't coerce str to unicode, in case the contents are binary
-      return "'%s'" % value.replace("'", "''")
-    else:
-      return "'%s'" % unicode(value).replace("'", "''")
+    return "'%s'" % ('%s' % value).replace("'", "''").replace('\\', '\\\\')
 
   def Submit(self, query):
     """Submit a query for execution, return an opaque operation handle."""
@@ -696,6 +714,7 @@ class QueryConsumer(threading.Thread):
     self._stream_results = kwargs.pop('stream_results', False)
     self._fatal_errors = kwargs.pop('fatal_errors',
                                     [1142, 1143, 1148, 2003, 2006, 2013, 2014])
+    self._charset = kwargs.get('charset', 'utf8')
     self._dbargs = kwargs
     self._dbh = None
     self._queue = Queue.Queue(0)
@@ -745,8 +764,7 @@ class QueryConsumer(threading.Thread):
     if not self._dbh:
       args = self._dbargs.copy()
       # Custom dbtypes get to do their own resolution
-      if self._resolver and (
-          'dbtype' in args and args['dbtype'] == 'mysql'):
+      if self._resolver and args['dbtype'] == 'mysql':
         try:
           (args['host'], port) = random.choice(self._resolver())
         except ResolutionError, e:
@@ -765,9 +783,8 @@ class QueryConsumer(threading.Thread):
         self._Close()
         return QueryErrors(('Code', 'Message'), ((3, str(e)),))
     try:
-      charset = self._dbargs.get('charset', 'ascii')
       if isinstance(query, unicode):
-        query = query.encode(charset)
+        query = query.encode(self._charset)
       logging.debug('Executing %s', query)
       self._dbh.query(query)
       if self._stream_results:
@@ -780,10 +797,9 @@ class QueryConsumer(threading.Thread):
         return QueryWarnings(('Level', 'Code', 'Message'), warnings)
       if not data:
         # Query returned no rows, but might have affected some
-        return VirtualTable([], [], [], rowcount)
+        return VirtualTable([], [], rowcount)
       # Query returned some rows
-      fields = [i[0].decode(charset) for i in data.describe()]
-      types = [self._TYPES.get(i[1], None) for i in data.describe()]
+      fields = [i[0].decode(self._charset) for i in data.describe()]
       if self._stream_results:
         def StreamResults():
           while True:
@@ -803,7 +819,7 @@ class QueryConsumer(threading.Thread):
     except Exception, e:
       logging.exception('Query returned unknown error.')
       return QueryErrors(('Code', 'Message'), ((4, str(e)),))
-    return VirtualTable(fields, result, types, rowcount)
+    return VirtualTable(fields, result, rowcount)
 
   def _Connect(self, args):
     log_args = args.copy()
@@ -907,7 +923,7 @@ class MultiConnection(_BaseConnection):
       # specs.
       spec['execute_on_connect'] = list(spec.get('execute_on_connect', []) +
                                         ['SET @shard=%d' % i])
-      self._connections[i] = (spec, spec.Connect())
+      self._connections[i] = [spec, None]
 
   def __del__(self):
     _BaseConnection.__del__(self)
@@ -931,8 +947,11 @@ class MultiConnection(_BaseConnection):
       shards = self._connections.keys()
 
     ops = []
-    for shard, (spec, connection) in self._connections.iteritems():
+    for shard, value in self._connections.iteritems():
+      spec, connection = value
       if shard in shards:
+        if connection is None:
+          connection = value[1] = spec.Connect()
         ops.append((spec['host'], connection, connection.Submit(query)))
     return ops
 
@@ -1169,8 +1188,12 @@ class DNSResolver(Cache):
     return [(ip, _DEFAULT_PORT) for ip in ip_list]
 
 
-def XSplit(value, sep):
-  """Split the input as a generator."""
+def XSplit(value, sep, callback=None):
+  """Split the input as a generator.
+
+  If specified, fires callback with one argument (character position of end of
+  line) after each line is yielded.
+  """
   loc = 0
   while True:
     splitpoint = value.find(sep, loc)
@@ -1179,6 +1202,8 @@ def XSplit(value, sep):
       return
     yield value[loc:splitpoint]
     loc = splitpoint + len(sep)
+    if callback:
+      callback(loc)
 
 
 def XCombineSQL(lines):
