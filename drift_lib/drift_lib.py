@@ -592,7 +592,7 @@ Count=@count
 REPLACE INTO %(golden_table)s
 (DatabaseName, TableName, Chunk, JobStarted, ChunkDone,
 Offsets, Checksums, Count)
-VALUES ('%(db_name)%', '%(table)s', %(chunk)s, '%(job_started)s',
+VALUES ('%(db_name)s', '%(table)s', %(chunk)s, '%(job_started)s',
 '%(chunk_done_copy)s', '%(offset_copy)s', '%(checksum_copy)s',
 %(count_copy)s)
 """.replace('\n', ' ').strip()
