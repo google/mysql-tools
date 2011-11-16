@@ -20,6 +20,8 @@ import functools
 import heapq
 import logging
 import Queue
+import os
+import signal
 import threading
 import time
 import weakref
@@ -27,32 +29,6 @@ import weakref
 
 def DoNothing():
   pass
-
-
-class Notification(object):
-  """Allow multiple threads to wait for an occurrence of an event.
-
-  All threads block on WaitForNotification() until one thread calls Notify(),
-  after which all other calls unblock.
-  """
-
-  def __init__(self):
-    self._lock = threading.Lock()
-    self._lock.acquire()
-
-  def Notify(self):
-    self._lock.release()
-
-  def WaitForNotification(self):
-    self._lock.acquire()
-    self._lock.release()
-
-  def HasBeenNotified(self):
-    if self._lock.acquire(False):
-      self._lock.release()
-      return True
-    else:
-      return False
 
 
 class BlockingCallback(object):
@@ -73,7 +49,7 @@ class BlockingCallback(object):
     self._callback = callback
     self._calls_remaining = num_calls
     self._lock = threading.Lock()
-    self._notification = Notification()
+    self._event = threading.Event()
 
   def __call__(self, *args, **kwargs):
     """Make this object magically callable."""
@@ -85,12 +61,12 @@ class BlockingCallback(object):
     ret = None
     if self._callback:
       ret = self._callback(*args, **kwargs)
-    self._notification.Notify()
+    self._event.set()
     return ret
 
   def Wait(self):
     """Block until called num_calls times and the callback completes."""
-    self._notification.WaitForNotification()
+    self._event.wait()
 
 
 class CancellableCallback(object):
@@ -118,6 +94,16 @@ def ReturnOnReferenceError(func):
     except ReferenceError:
       logging.exception('Reference went bad; returning')
       return
+  return wrapper
+
+
+def AbortOnException(func):
+  def wrapper(*args, **kwargs):
+    try:
+      return func(*args, **kwargs)
+    except Exception:
+      logging.exception('Exception in callback.')
+      os.kill(os.getpid(), signal.SIGABRT)
   return wrapper
 
 
@@ -204,8 +190,8 @@ class EventManager(object):
     try:
       while True:
         t = self._threads.pop()
-        if isinstance(t, Notification):
-          t.WaitForNotification()
+        if isinstance(t, threading.Event):
+          t.wait()
         else:
           assert isinstance(t, threading.Thread)
           t.join()
@@ -250,11 +236,11 @@ class EventManager(object):
       while schedule and schedule[0][0] <= time.time():
         self.Add(heapq.heappop(schedule)[1])
 
-  def Add(self, callback):
+  def Add(self, callback, *args, **kwargs):
     """Add a callback to be run on the thread pool."""
-    self._run_queue.put(callback)
+    self._run_queue.put(functools.partial(callback, *args, **kwargs))
 
-  def AddAfter(self, delay, callback):
+  def AddAfter(self, delay, callback, *args, **kwargs):
     """Add a callback to be run on the thread pool after delay seconds.
 
     We guarantee that callback will not be run before delay seconds have
@@ -262,17 +248,18 @@ class EventManager(object):
     point before it is started.
     """
     assert delay >= 0
-    self._schedule_queue.put((time.time() + delay, callback))
+    self._schedule_queue.put((time.time() + delay,
+                              functools.partial(callback, *args, **kwargs)))
 
   def DonateThread(self):
     """Add the current thread to the thread pool.
 
     Blocks until something calls Shutdown() or StartShutdown().
     """
-    notification = Notification()
-    self._threads.append(notification)
+    event = threading.Event()
+    self._threads.append(event)
     self._Worker()
-    notification.Notify()
+    event.set()
 
   def Partial(self, func, *args, **kwargs):
     """Like functools.partial, but will run the callback in this EventManager.
@@ -281,5 +268,5 @@ class EventManager(object):
     """
     callback = functools.partial(func, *args, **kwargs)
     def Callback(*args2, **kwargs2):
-      self.Add(functools.partial(callback, *args2, **kwargs2))
+      self.Add(callback, *args2, **kwargs2)
     return Callback
