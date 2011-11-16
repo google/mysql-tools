@@ -14,68 +14,81 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import csv
 import time
+
+try:
+  from pylib import range_lib
+except ImportError:
+  from ..pylib import range_lib
+
+
+class CsvWriter(object):
+  """Writes the changes out to csv."""
+
+  def __init__(self, filename):
+    self._filename = filename
+    self._writer = None
+
+  def WriteRows(self, rows):
+    listkeys = rows[0].keys()
+    if not self._writer:
+      self._writer = csv.DictWriter(open(self._filename, 'wb'), listkeys)
+    self._writer.writerows(rows)
+
+
+writer_method = {'CSV': CsvWriter}
+
 
 class Willie(object):
   """Groundskeeper willie class."""
 
-  def __init__(self, dbh, table, condition, limit,
-               utilization_percent, dry_run):
+  def __init__(self, dbh, database_name, table, condition, limit,
+               utilization_percent, dry_run, writer_type, filename):
     """
       Args:
         dbh: The database handle.
+        database_name: The Database Name.
         table: The table to cleanup.
         condition: The conditional to get results for.
         limit: The biggest batch size to get.
         utilization percent: The utilization percentage.
         dry_run: Do this for real or not.
+        writer_type: Type of file to write out delete rows.
+        filename: Name of file to write out delete rows to.
     """
     self._dbh = dbh
+    self._database_name = database_name
     self._table = table
     self._condition = condition
     self._limit = limit
     self._utilization_percent = utilization_percent
     self._dry_run = dry_run
-    self._primary_key_column = self.GetPrimaryKey()
-
-  def GetPrimaryKey(self):
-    """Gets the Primary Key For a Table.
-
-    Returns:
-      Returns the primary key for a table.
-    """
-    indexes = self._dbh.ExecuteOrDie("SELECT COLUMN_NAME FROM "
-                                     "INFORMATION_SCHEMA.KEY_COLUMN_USAGE "
-                                     "WHERE TABLE_NAME='%s' AND "
-                                     "CONSTRAINT_NAME='PRIMARY';"
-                                     % (self._table))
-    assert len(indexes) == 1
-    return indexes[0]['COLUMN_NAME']
-
-  def FetchRows(self):
-    """Fetchs rows to delete from the database.
-
-    Returns:
-      Returns results from the database to operate on.
-    """
-    if self._limit:
-      rows = self._dbh.ExecuteOrDie("SELECT %s FROM %s WHERE "
-                                    "%s LIMIT %s;"
-                                    % (self._primary_key_column, self._table,
-                                       self._condition, self._limit))
+    self._writer_type = writer_type
+    self._filename = filename
+    if not dry_run and writer_type:
+      self._writer = writer_method[writer_type](filename)
     else:
-      rows = self._dbh.ExecuteOrDie("SELECT %s FROM %s WHERE %s;"
-                                    % (self._primary_key_column, self._table,
-                                       self._condition))
-    values = [row['RequestId'] for row in rows]
-    return values
+      self._writer = None
 
-  def PerformDelete(self, results):
+
+  def GetRange(self):
+    """Gets ranges to delete using range_lib based on a set condition."""
+    rangeh = range_lib.PrimaryKeyRange(self._dbh, self._database_name,
+                                       self._table)
+    first_key = rangeh.GetFirstPrimaryKeyValue(self._condition)
+    nth_key = rangeh.GetNthPrimaryKeyValue(self._limit, first_key)
+    rows = rangeh.RangePrimaryKeyValues(first_key, nth_key, '*')
+    if self._writer:
+      self._writer.WriteRows(rows)
+    return rangeh.GenerateRangeWhere(first_key, nth_key)
+
+
+  def PerformDelete(self, where_clause):
     """Deletes results from the database."""
     start_time = time.time()
-    result = ','.join(str(x) for x in results)
-    delete_statement = ("DELETE FROM %s WHERE %s IN (%s)"
-                        % (self._table, self._primary_key_column, result))
+    delete_statement = ("DELETE FROM %s.%s WHERE %s"
+                        % (self._database_name, self._table, where_clause))
     print  "Delete statement: %s" % delete_statement
     if not self._dry_run:
       self._dbh.ExecuteOrDie(delete_statement)
@@ -88,9 +101,9 @@ class Willie(object):
 
   def Loop(self):
     while True:
-      keys = self.FetchRows()
-      if keys:
-        self.PerformDelete(keys)
+      where_clause = self.GetRange()
+      if where_clause:
+        self.PerformDelete(where_clause)
         if self._dry_run:
           return
       else:

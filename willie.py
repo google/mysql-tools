@@ -31,10 +31,15 @@ flags.DEFINE_boolean('dry_run', True,
                      'Don\'t actually make any changes to the database.')
 flags.DEFINE_integer('limit', 100, 'Limit for select query')
 flags.DEFINE_integer('utilization_percent', 1, 'Utilization limit')
-flags.DEFINE_string('db', None, 'DBSpec to run on')
-flags.DEFINE_string('table', None, 'Table to operate on')
 flags.DEFINE_string('condition', None, 'Column condition'
                     'to select rows to delete')
+flags.DEFINE_string('db', None, 'DBSpec to run on')
+flags.DEFINE_string('filename', None,
+                    'Name of CSV file for deleted rows.')
+flags.DEFINE_string('table', None, 'Table to operate on')
+flags.DEFINE_string('writer_type', None,
+                    'What Writer Type Should Be Used.'
+                    'CSV is currently the only accepted type.')
 
 
 def main(args):
@@ -44,9 +49,12 @@ def main(args):
 
   dbh = db.Connect(FLAGS.db)
 
-  groundskeeper = willie.Willie(dbh, FLAGS.table, FLAGS.condition,
-                                FLAGS.limit, FLAGS.utilization_percent,
-                                FLAGS.dry_run)
+  database_name = db.Spec.Parse(FLAGS.db)['db']
+
+  groundskeeper = willie.Willie(dbh, database_name, FLAGS.table,
+                                FLAGS.condition, FLAGS.limit,
+                                FLAGS.utilization_percent, FLAGS.dry_run,
+                                FLAGS.writer_type, FLAGS.filename)
   groundskeeper.Loop()
 
   dbh.Close()
