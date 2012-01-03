@@ -19,12 +19,11 @@
 import functools
 import heapq
 import logging
-import Queue
 import os
+import Queue
 import signal
 import threading
 import time
-import weakref
 
 
 def DoNothing():
@@ -86,25 +85,15 @@ class CancellableCallback(object):
     self._cancelled = True
 
 
-def ReturnOnReferenceError(func):
-  """Return immediately if a weak reference target goes away."""
-  def wrapper(*args, **kwargs):
-    try:
-      func(*args, **kwargs)
-    except ReferenceError:
-      logging.exception('Reference went bad; returning')
-      return
-  return wrapper
-
-
 def AbortOnException(func):
-  def wrapper(*args, **kwargs):
+
+  def Wrapper(*args, **kwargs):
     try:
       return func(*args, **kwargs)
     except Exception:
       logging.exception('Exception in callback.')
       os.kill(os.getpid(), signal.SIGABRT)
-  return wrapper
+  return Wrapper
 
 
 class EventManager(object):
@@ -124,7 +113,17 @@ class EventManager(object):
     em.Shutdown()
   """
 
-  _shutdown = True
+  class EMState(object):
+    """Store shared state between EventManager and child threads."""
+    def __init__(self, max_queue_size):
+      # Immediate events are just callbacks.
+      self.run_queue = Queue.Queue(max_queue_size)
+      # Scheduled events are (time_to_run, callback) tuples.
+      self.schedule_queue = Queue.Queue()
+      # Actually an empty heapq.
+      self.schedule = []
+      self.shutdown = True
+
   _scheduler = None
 
   def __init__(self, num_threads, max_queue_size=0):
@@ -137,10 +136,7 @@ class EventManager(object):
     """
     self._num_threads = num_threads
     self._threads = []
-    # Expects callback in queue.
-    self._run_queue = Queue.Queue(max_queue_size)
-    # Expects (time_to_run, callback) in queue.
-    self._schedule_queue = Queue.Queue()
+    self._state = self.EMState(max_queue_size)
     self._shutdown_lock = threading.Lock()
 
   def __del__(self):
@@ -149,17 +145,15 @@ class EventManager(object):
   def Start(self):
     """Start all worker threads."""
     assert not self._threads, 'EventManager started when already running.'
-    self._shutdown = False
-    # Threads get weak references to the instance so they don't block
-    # destruction, since we'll tear them down during destruction anyway. This
-    # does mean that self can suddenly become invalid inside _Worker() and
-    # _Scheduler().
-    weakself = weakref.proxy(self)
-    self._scheduler = threading.Thread(target=EventManager._Scheduler,
-                                       args=(weakself,))
+    self._state.shutdown = False
+    # Only the EMState object is shared between this object and its child
+    # threads. This allows our reference count to go to zero and destruction to
+    # occur.
+    self._scheduler = threading.Thread(target=self._Scheduler,
+                                       args=(self._state,))
     self._scheduler.start()
     for _ in xrange(self._num_threads):
-      t = threading.Thread(target=EventManager._Worker, args=(weakself,))
+      t = threading.Thread(target=self._Worker, args=(self._state,))
       t.start()
       self._threads.append(t)
 
@@ -168,7 +162,7 @@ class EventManager(object):
 
     This is safe to call from within an EventManager callback.
     """
-    self._shutdown = True
+    self._state.shutdown = True
     # Wake up all the threads, so they notice the shutdown flag.
     self.AddAfter(0, DoNothing)
     for _ in self._threads:
@@ -190,7 +184,7 @@ class EventManager(object):
     try:
       while True:
         t = self._threads.pop()
-        if isinstance(t, threading.Event):
+        if isinstance(t, threading._Event):
           t.wait()
         else:
           assert isinstance(t, threading.Thread)
@@ -200,56 +194,64 @@ class EventManager(object):
       pass
     self._shutdown_lock.release()
 
-  @ReturnOnReferenceError
-  def _Worker(self):
+  @staticmethod
+  def _Worker(state):
     """Worker thread main function."""
     logging.info('Worker thread starting')
     while True:
-      callback = self._run_queue.get(True)
-      if self._shutdown:
+      if state.shutdown:
         logging.info('Worker thread shutting down')
         break
+      callback = state.run_queue.get(True)
+      # It would be good to check shutdown here, but then we may be stuck
+      # holding a callback that we can't re-add to the queue (since it would
+      # reorder, and it might be full and deadlock).
       try:
         callback()
       except Exception:
         logging.exception('Exception inside %s', callback)
 
-  @ReturnOnReferenceError
-  def _Scheduler(self):
+  @staticmethod
+  def _Scheduler(state):
     """Scheduler thread main function."""
-    # (time_to_run, callback)
-    schedule = []  # actually an empty heapq
     while True:
-      if schedule:
-        timeout = max(0.0, schedule[0][0] - time.time())
+      if state.schedule:
+        timeout = max(0.0, state.schedule[0][0] - time.time())
       else:
         timeout = None
       try:
-        entry = self._schedule_queue.get(True, timeout)
-        heapq.heappush(schedule, entry)
+        entry = state.schedule_queue.get(True, timeout)
+        heapq.heappush(state.schedule, entry)
       except Queue.Empty:
         # We woke up to execute a scheduled event, not because we had new
         # input.
         pass
-      if self._shutdown:
+      if state.shutdown:
         break
-      while schedule and schedule[0][0] <= time.time():
-        self.Add(heapq.heappop(schedule)[1])
+      while state.schedule and state.schedule[0][0] <= time.time():
+        state.run_queue.put(heapq.heappop(state.schedule)[1])
 
   def Add(self, callback, *args, **kwargs):
     """Add a callback to be run on the thread pool."""
-    self._run_queue.put(functools.partial(callback, *args, **kwargs))
+    self._state.run_queue.put(functools.partial(callback, *args, **kwargs))
 
   def AddAfter(self, delay, callback, *args, **kwargs):
     """Add a callback to be run on the thread pool after delay seconds.
+
+    Args:
+      delay: delay in seconds before callback is invoked.
+      callback: the callback to be invoked.
+      *args: positional arguments passed to the callback.
+      **kargs: keywork arguments passed to the callback.
 
     We guarantee that callback will not be run before delay seconds have
     elapsed, but make no guarantees about how much time will pass after that
     point before it is started.
     """
     assert delay >= 0
-    self._schedule_queue.put((time.time() + delay,
-                              functools.partial(callback, *args, **kwargs)))
+    self._state.schedule_queue.put(
+        (time.time() + delay,
+         functools.partial(callback, *args, **kwargs)))
 
   def DonateThread(self):
     """Add the current thread to the thread pool.
@@ -262,11 +264,27 @@ class EventManager(object):
     event.set()
 
   def Partial(self, func, *args, **kwargs):
-    """Like functools.partial, but will run the callback in this EventManager.
+    """Like functools.partial but will run the callback in this EventManager.
+
+    Creates a function with early-bound arguments like
+    functools.partial.  When invoked, the function will add the
+    callback to this EventManager.  Arguments to the callback can be
+    supplied as arguments to this function (early binding), or
+    supplied at the time the callback is invoked (late binding).
+
+    Args:
+      func: the function to be invoked as a callback.
+      *args: positional arguments passed to the callback.
+      **kargs: keywork arguments passed to the callback.
+
+    Returns:
+      A function that, when invoked with positional and keywork
+      arguments, will add the callback to the event manager.
 
     Note that this makes the callback non-blocking.
     """
     callback = functools.partial(func, *args, **kwargs)
+
     def Callback(*args2, **kwargs2):
       self.Add(callback, *args2, **kwargs2)
     return Callback
