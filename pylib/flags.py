@@ -24,15 +24,30 @@ __author__ = 'chip@google.com (Chip Turner)'
 import optparse
 import sys
 
+CALLS = []
 FLAGS = optparse.Values()
 parser = optparse.OptionParser()
-CALLS = []
+_required_flags = []
+
+
+class Error(Exception):
+  pass
+
+
+class FlagNameError(Error):
+  pass
+
+
+class FlagValidationError(Error):
+  pass
+
 
 def RecordCall(func):
   def wrapper(*args, **kwargs):
     CALLS.append((func.__name__, args, kwargs))
     return func(*args, **kwargs)
   return wrapper
+
 
 @RecordCall
 def DEFINE_string(name, default, description, short_name=None):
@@ -46,6 +61,7 @@ def DEFINE_string(name, default, description, short_name=None):
   parser.set_default(name, default)
   setattr(FLAGS, name, default)
 
+
 @RecordCall
 def DEFINE_multistring(name, default, description, short_name=None):
   if default is not None and default != '':
@@ -57,6 +73,7 @@ def DEFINE_multistring(name, default, description, short_name=None):
   parser.add_option(action="append", type="string", help=description, *args)
   parser.set_default(name, default)
   setattr(FLAGS, name, default)
+
 
 @RecordCall
 def DEFINE_integer(name, default, description, short_name=None):
@@ -70,6 +87,7 @@ def DEFINE_integer(name, default, description, short_name=None):
   parser.set_default(name, default)
   setattr(FLAGS, name, default)
 
+
 @RecordCall
 def DEFINE_float(name, default, description, short_name=None):
   if default is not None and default != '':
@@ -81,6 +99,7 @@ def DEFINE_float(name, default, description, short_name=None):
   parser.add_option(type="float", help=description, *args)
   parser.set_default(name, default)
   setattr(FLAGS, name, default)
+
 
 @RecordCall
 def DEFINE_boolean(name, default, description, short_name=None):
@@ -94,11 +113,22 @@ def DEFINE_boolean(name, default, description, short_name=None):
   parser.set_default(name, default)
   setattr(FLAGS, name, default)
 
+
+def MarkFlagAsRequired(name):
+  if not parser.has_option('--%s' % name):
+    raise FlagNameError('Tried to mark unknown flag --%s as required.' % name)
+  _required_flags.append(name)
+
+
 def ParseArgs(argv):
   usage = sys.modules["__main__"].__doc__
   parser.set_usage(usage)
-  unused_flags, new_argv = parser.parse_args(args=argv, values=FLAGS)
+  flags, new_argv = parser.parse_args(args=argv, values=FLAGS)
+  for name in _required_flags:
+    if getattr(flags, name) is None:
+      raise FlagValidationError('Flag --%s must be specified.' % name)
   return new_argv
+
 
 def ShowUsage():
   parser.print_help()
