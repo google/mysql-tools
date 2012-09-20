@@ -36,6 +36,7 @@ FLAGS = flags.FLAGS
 flags.DEFINE_multistring('max', [], 'Name of column to find maximum')
 flags.DEFINE_multistring('min', [], 'Name of column to find minimum')
 flags.DEFINE_multistring('sum', [], 'Name of column to sum')
+flags.DEFINE_multistring('sort', [], 'Name of column to sort by')
 
 
 def main(argv):
@@ -48,7 +49,7 @@ def main(argv):
   to_max = set(FLAGS.max)
   agg_fields = to_sum | to_min | to_max
   assert len(agg_fields) == len(to_sum) + len(to_min) + len(to_max)
-  assert agg_fields <= all_fields
+  assert agg_fields <= all_fields, 'Unknown field name'
   keys = all_fields - agg_fields
 
   aggregates = {}
@@ -69,8 +70,13 @@ def main(argv):
         row[field] = float(row[field])
       aggregates[key] = row
 
+  output = aggregates.itervalues()
+
+  for sort_key in reversed(FLAGS.sort):
+    output = sorted(output, key=lambda x: x[sort_key])
+
   output_csv.writerow(dict((x, x) for x in all_fields))
-  output_csv.writerows(aggregates.itervalues())
+  output_csv.writerows(output)
 
 
 if __name__ == '__main__':
