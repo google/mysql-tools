@@ -46,7 +46,8 @@ FLAGS = flags.FLAGS
 
 flags.DEFINE_string('charset', 'utf8', 'Input/output character set')
 flags.DEFINE_string('prompt', None, 'Custom prompt instead of the dbspec')
-
+flags.DEFINE_boolean('print_field_names', True,
+                     'Print field names to CSV and stdout.')
 _CSV_RE = re.compile('^\s*CSV\s+(?P<query>.*)$',
                      re.IGNORECASE | re.DOTALL | re.MULTILINE)
 
@@ -58,49 +59,85 @@ def _Encode(value):
     return value
 
 
-def Execute(dbh, query):
-  csvh = None
-  csv_match = _CSV_RE.match(query)
-  if csv_match:
-    csvh = csv.writer(sys.stdout)
-    query = csv_match.group('query')
-  results = dbh.MultiExecute(query)
-  if csvh:
-    csvh.writerow(results.values()[0].GetFields())
-    for host, result in results.iteritems():
-      for row in result.GetRows():
-        fields = []
-        for field in row:
-          if isinstance(field, unicode):
-            fields.append(field.encode(FLAGS.charset))
-          else:
-            fields.append(field)
-        csvh.writerow(fields)
+def _ShowTable(result):
+  if result is None:
     return
-  by_result = {}
-  for name, result in results.iteritems():
-    by_result.setdefault(result, []).append(name)
-  if len(by_result) > 1:
-    for result, names in by_result.iteritems():
-      if not result:
-        continue
-      names.sort()
-      print '%s:' % names
-      for row in result.GetTable():
-        print _Encode(row)
-  else:
-    if result:
-      for row in result.GetTable():
-        print _Encode(row)
+  if result:
+    for row in result.GetTable(FLAGS.print_field_names):
+      print _Encode(row)
+  rowcount = result.GetRowsAffected()
+  # Heuristic for whether this is useful information.
+  if rowcount is not None and rowcount != len(result):
+    print '%d row(s) affected' % rowcount
 
 
-def GetLines(prompt):
-  while True:
-    try:
-      yield raw_input(prompt).decode(FLAGS.charset)
-    except EOFError:
-      print
+class CancellableExecutor(object):
+  """This class helps executing a single query and cancelling it.
+
+  Properties:
+    dbh: A database connection as per db.Connect().
+    ongoing_operation: A db.Operation representing the latest Execute() call.
+  """
+
+  def __init__(self, dbh):
+    """Builds a new instance.
+
+    Args:
+      dbh: A database connection as per db.Connect().
+    """
+    self.dbh = dbh
+    self.ongoing_operation = None
+
+  def CancelOngoingOperation(self):
+    if self.ongoing_operation:
+      self.dbh.Cancel(self.ongoing_operation)
+      self.ongoing_operation = None
+
+  def Execute(self, query):
+    """Executes the query and displays the results on screen."""
+    csvh = None
+    csv_match = _CSV_RE.match(query)
+    if csv_match:
+      csvh = csv.writer(sys.stdout)
+      query = csv_match.group('query')
+
+    self.ongoing_operation = self.dbh.Submit(query)
+    results = self.dbh.Wait(self.ongoing_operation)
+    for key, value in results.items():
+      results[key] = list(value)[0]
+    self.ongoing_operation = None
+
+    if csvh:
+      if FLAGS.print_field_names:
+        csvh.writerow(results.values()[0].GetFields())
+      for host, result in results.iteritems():
+        for row in result.GetRows():
+          fields = []
+          for field in row:
+            if isinstance(field, unicode):
+              fields.append(field.encode(FLAGS.charset))
+            else:
+              fields.append(field)
+          csvh.writerow(fields)
       return
+    by_result = {}
+    result = None
+    for name, result in results.iteritems():
+      by_result.setdefault(result, []).append(name)
+    if len(by_result) > 1:
+      for result, names in by_result.iteritems():
+        if not result:
+          continue
+        names.sort()
+        print '%s:' % names
+        _ShowTable(result)
+    else:
+      _ShowTable(result)
+
+
+def Execute(dbh, query):
+  executor = CancellableExecutor(dbh)
+  executor.Execute(query)
 
 
 def main(argv):
@@ -119,12 +156,32 @@ def main(argv):
       prompt = '%s> ' % FLAGS.prompt
     else:
       prompt = '%s> ' % argv[1]
+    continued_prompt = ' ' * (len(prompt) - 3) + '-> '
   else:
-    prompt = ''
+    prompt = continued_prompt = ''
+
+  continued = [False]
+
+  def GetLines():
+    while True:
+      try:
+        display_prompt = continued_prompt if continued[0] else prompt
+        continued[0] = True
+        yield raw_input(display_prompt).decode(FLAGS.charset)
+      except EOFError:
+        print
+        return
 
   with db.Connect(argv[1], charset=FLAGS.charset) as dbh:
-    for statement in db.XCombineSQL(GetLines(prompt)):
-      Execute(dbh, statement)
+    for statement in db.XCombineSQL(GetLines()):
+      continued[0] = False
+      executor = CancellableExecutor(dbh)
+      try:
+        executor.Execute(statement)
+      except KeyboardInterrupt:
+        print ('Cancelling current query. '
+               'Hitting ^C again will terminate the program.')
+        executor.CancelOngoingOperation()
 
 
 if __name__ == '__main__':
