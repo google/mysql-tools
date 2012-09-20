@@ -122,7 +122,7 @@ def InitStateTable(dbh, state_db, state_table, fh, fsize, fchecksum):
 
   If a row already exists for the specified file name, that row is replaced.
   """
-  dbh.ExecuteOrDie("REPLACE INTO %s.%s VALUES ('%s', %d, '%s', 0)" %
+  dbh.ExecuteOrDie("REPLACE INTO %s.%s VALUES ('%s', %d, '%s', 0, NULL)" %
                    (state_db, state_table, fh.name, fsize, fchecksum))
 
 
@@ -172,12 +172,11 @@ class DbFileTrickler(trickle_lib.TrickledOperation):
 
     if not rows:
       logging.info("Creating row in state table")
-      self._db.ExecuteOrDie('BEGIN')
-      self._db.ExecuteOrDie(
-          "INSERT INTO %s.%s VALUES ('%s', %d, '%s', 0)" %
-          (self._state_database, self._state_table, self._filename,
-           self._size, self._checksum))
-      self._db.ExecuteOrDie('COMMIT')
+      with self._db.Transaction():
+        self._db.ExecuteOrDie(
+            "INSERT INTO %s.%s VALUES ('%s', %d, '%s', 0, NULL)" %
+            (self._state_database, self._state_table, self._filename,
+             self._size, self._checksum))
     else:
       if self._size != long(rows[0]['Size']):
         logging.fatal("database filesize does not match actual file: %s vs %s",
@@ -258,25 +257,23 @@ class DbFileTrickler(trickle_lib.TrickledOperation):
         batch.append([line])
 
     self._offset_bytes = self._fh.tell()
-    self._db.ExecuteOrDie('BEGIN')
+    with self._db.Transaction():
+      for transaction in batch:
+        for statement in transaction:
+          try:
+            self._db.ExecuteOrDie(statement)
+          except db.QueryWarningsException as e:
+            logging.warn('SQL generated warning: %s, %s', str(e), statement)
+            if not FLAGS.allow_warnings:
+              raise
 
-    for transaction in batch:
-      for statement in transaction:
-        try:
-          self._db.ExecuteOrDie(statement)
-        except db.QueryWarningsException, e:
-          logging.warn('SQL generated warning: %s, %s', str(e), statement)
-          if not FLAGS.allow_warnings:
-            raise
-
-    result = self._db.ExecuteOrDie(
-        "UPDATE %s.%s SET Offset = %d WHERE Filename = '%s' AND Offset = %d" %
-        (self._state_database, self._state_table,
-         self._offset_bytes, self._filename, starting_offset))
-    if result.GetRowsAffected() != 1:
-      logging.fatal("Attempt to update database state but something "
-                    "already changed it")
-    self._db.ExecuteOrDie('COMMIT')
+      result = self._db.ExecuteOrDie(
+          "UPDATE %s.%s SET Offset = %d WHERE Filename = '%s' AND Offset = %d" %
+          (self._state_database, self._state_table,
+           self._offset_bytes, self._filename, starting_offset))
+      if result.GetRowsAffected() != 1:
+        logging.fatal("Attempt to update database state but something "
+                      "already changed it")
 
     return len(batch)
 
@@ -290,8 +287,6 @@ def main(unused_argv):
   fh, size, checksum = _PrepareFile(FLAGS.input)
 
   dbspec = db.Spec.Parse(FLAGS.dbspec)
-  if not dbspec.IsSingle():
-    logging.fatal('Must specify a single database shard to operate on')
   with dbspec.Connect() as dbh:
     if FLAGS.session_init:
       logging.info('Initializing session with: %s', FLAGS.session_init)
