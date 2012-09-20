@@ -83,8 +83,6 @@ def main(argv):
     raise app.UsageError('You must specify a dbspec.')
 
   dbspec = db.Spec.Parse(FLAGS.dbspec)
-  if not dbspec.IsSingle():
-    logging.fatal('Must specify a single database shard to operate on.')
 
   logging.info('Heartbeat starting up...')
   while True:
