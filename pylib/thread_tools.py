@@ -175,24 +175,23 @@ class EventManager(object):
     leaving the EventManager in an undefined state.
     """
     self.StartShutdown()
-    self._shutdown_lock.acquire()
-    # Shut down the scheduler.
-    if self._scheduler:
-      self._scheduler.join()
-      self._scheduler = None
-    # Wait for worker threads to finish their current task.
-    try:
-      while True:
-        t = self._threads.pop()
-        if isinstance(t, threading._Event):
-          t.wait()
-        else:
-          assert isinstance(t, threading.Thread)
-          t.join()
-    except IndexError:
-      # We ran out of threads to pop.
-      pass
-    self._shutdown_lock.release()
+    with self._shutdown_lock:
+      # Shut down the scheduler.
+      if self._scheduler:
+        self._scheduler.join()
+        self._scheduler = None
+      # Wait for worker threads to finish their current task.
+      try:
+        while True:
+          t = self._threads.pop()
+          if isinstance(t, threading._Event):
+            t.wait()
+          else:
+            assert isinstance(t, threading.Thread)
+            t.join()
+      except IndexError:
+        # We ran out of threads to pop.
+        pass
 
   @staticmethod
   def _Worker(state):
@@ -242,16 +241,37 @@ class EventManager(object):
       delay: delay in seconds before callback is invoked.
       callback: the callback to be invoked.
       *args: positional arguments passed to the callback.
-      **kargs: keywork arguments passed to the callback.
+      **kwargs: keyword arguments passed to the callback.
 
     We guarantee that callback will not be run before delay seconds have
     elapsed, but make no guarantees about how much time will pass after that
     point before it is started.
     """
-    assert delay >= 0
+    assert delay >= 0, 'Delay must be non-negative'
     self._state.schedule_queue.put(
         (time.time() + delay,
          functools.partial(callback, *args, **kwargs)))
+
+  def AddPeriodic(self, delay, callback, *args, **kwargs):
+    """Add a callback to be run on the thread pool periodically.
+
+    Args:
+      delay: delay in seconds between successive invocations of the callback
+      callback: the callback to be invoked.
+      *args: positional arguments passed to the callback.
+      **kwargs: keyword arguments passed to the callback.
+
+    We guarantee that callback will not be run before delay seconds have
+    elapsed since the last call finished, but make no guarantees about how much
+    time will pass after that point before another call is made.
+    """
+    assert delay >= 0, 'Delay must be non-negative'
+    def Callback():
+      try:
+        callback(*args, **kwargs)
+      finally:
+        self.AddAfter(delay, Callback)
+    self.Add(Callback)
 
   def DonateThread(self):
     """Add the current thread to the thread pool.
@@ -260,7 +280,7 @@ class EventManager(object):
     """
     event = threading.Event()
     self._threads.append(event)
-    self._Worker()
+    self._Worker(self._state)
     event.set()
 
   def Partial(self, func, *args, **kwargs):
@@ -275,10 +295,10 @@ class EventManager(object):
     Args:
       func: the function to be invoked as a callback.
       *args: positional arguments passed to the callback.
-      **kargs: keywork arguments passed to the callback.
+      **kwargs: keyword arguments passed to the callback.
 
     Returns:
-      A function that, when invoked with positional and keywork
+      A function that, when invoked with positional and keyword
       arguments, will add the callback to the event manager.
 
     Note that this makes the callback non-blocking.
