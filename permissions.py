@@ -78,10 +78,10 @@ FLAGS = flags.FLAGS
 flags.DEFINE_string('db', None, 'DB spec to read from/push to')
 flags.DEFINE_integer('push_duration', None,
                      'Staggered push duration (seconds)')
-flags.DEFINE_string('file', None,
-                    'File containing permissions settings on which to '
-                    'operate. The file may contain one or more named sets of '
-                    'permissions.')
+flags.DEFINE_multistring('file', None,
+                         'File containing permissions settings on which to '
+                         'operate. The file may contain one or more named sets '
+                         'of permissions.')
 flags.DEFINE_string('public_keyfile', None,
                     'File to write/read public encryption key to/from')
 flags.DEFINE_string('private_keyfile', None,
@@ -92,11 +92,16 @@ flags.DEFINE_string('set', None,
                     'Set name to publish to')
 flags.DEFINE_string('source_set', None,
                     'Set name to publish from; defaults to target set')
+flags.DEFINE_boolean('incremental', True,
+                     'Write only differences to existing tables, instead of '
+                     'clearing tables and starting from scratch')
+flags.DEFINE_multistring('comment_name', [], 'Comment name to retrieve.')
 
 
 _COMMANDS = {'decrypt-hash':     utils.DecryptHashInteractive,
              'encrypt-hash':     utils.EncryptHashInteractive,
              'encrypt-password': utils.EncryptPasswordInteractive,
+             'fetch-comments':   utils.FetchCommentsInteractive,
              'generate-key':     utils.GenerateKey,
              'generate-password':utils.GeneratePasswordInteractive,
              'hash-password':    utils.HashPasswordInteractive,
@@ -135,9 +140,11 @@ def main(argv):
     args['private_keyfile'] = FLAGS.private_keyfile
 
   if FLAGS.file:
-    args['self'] = use.PermissionsFile(open(FLAGS.file, 'r').read(),
-                                       private_keyfile=FLAGS.private_keyfile)
+    args['self'] = use.PermissionsFile(
+        None, private_keyfile=FLAGS.private_keyfile)
     args.pop('private_keyfile', None)  # Not otherwise used
+    for file in FLAGS.file:
+      args['self'].Parse(open(file, 'r').read())
 
   if FLAGS.db:
     args['dbh'] = db.Connect(FLAGS.db)
@@ -155,6 +162,11 @@ def main(argv):
   if FLAGS.public_keyfile:
     args['public_keyfile'] = FLAGS.public_keyfile
 
+  if FLAGS.comment_name:
+    args['comment_names'] = FLAGS.comment_name
+
+  args['incremental'] = FLAGS.incremental
+
   CheckArgs(_COMMANDS[argv[1]], args)
   try:
     if 'self' in args:
@@ -162,7 +174,7 @@ def main(argv):
       _COMMANDS[argv[1]](obj, **args)
     else:
       _COMMANDS[argv[1]](**args)
-  except db.Error, e:
+  except db.Error as e:
     # Lose the stack trace; it's not useful for DB errors
     print e
     return 1
