@@ -38,25 +38,32 @@ except ImportError:
 
 
 class Error(Exception): pass
-class ParseError(Error): pass
+
+
+class ParseError(Error):
+  def __init__(self, msg, loc):
+    self.msg = msg
+    self.loc = loc
+
+  def __str__(self):
+    return '%s (at char %d)' % (self.msg, self.loc)
 
 
 class SQLParser(object):
   """SQL Parser"""
 
-  @staticmethod
-  def _LogStart(instring, loc, expr):
-    logging.debug('Start: loc: %d, expr: %s', loc, expr.name)
+  def _LogStart(self, instring, loc, expr):
+    logging.debug('Start: base_loc: %d, loc: %d, expr: %s',
+                  self._base_loc, loc, expr.name)
 
-  @staticmethod
-  def _LogSuccess(instring, start, loc, expr, tokens):
-    tokens['loc'] = loc
-    logging.debug('Success: loc: %d, expr: %s, tokens: %s',
-                  loc, expr.name, tokens)
+  def _LogSuccess(self, instring, start, loc, expr, tokens):
+    logging.debug('Success: base_loc: %d, loc: %d, expr: %s, tokens: %s',
+                  self._base_loc, loc, expr.name, tokens)
+    tokens['loc'] = self._base_loc + loc
 
-  @staticmethod
-  def _LogFailure(instring, start, expr, err):
-    logging.debug('Failure: expr: %s, err: %s', expr.name, err)
+  def _LogFailure(self, instring, start, expr, err):
+    logging.debug('Failure: base_loc: %d, loc: %d, expr: %s, err: %s',
+                  self._base_loc, err.loc, expr.name, err)
 
   def __init__(self, progress_callback=None):
     """Constructor.
@@ -72,7 +79,8 @@ class SQLParser(object):
     # Fill the grammar rule _KEYWORDS with all the keywords possible
     SQLParser.__dict__['_KEYWORDS'] << pyp.MatchFirst(keywords)
 
-    self._loc = 0
+    self._loc = 0  # Last yielded line end
+    self._base_loc = 0  # Start of this statement
     self._callback = progress_callback
 
     for key in dir(self):
@@ -93,8 +101,9 @@ class SQLParser(object):
         yield self._QUERY.parseString(statement)[0]
         if self._callback:
           self._callback(self._loc)
-    except pyp.ParseException, e:
-      raise ParseError(e)
+        self._base_loc = self._loc + len(statement) + 1
+    except pyp.ParseException as e:
+      raise ParseError(e.msg, self._base_loc + e.loc)
 
   # DISCARDED
 
@@ -119,6 +128,8 @@ class SQLParser(object):
   _ADD_TOKEN = pyp.CaselessKeyword('add')
   _CHANGE_TOKEN = pyp.CaselessKeyword('change')
   _DROP_TOKEN = pyp.CaselessKeyword('drop')
+  _CONVERT_TOKEN = pyp.CaselessKeyword('convert')
+  _TO_TOKEN = pyp.CaselessKeyword('to')
 
   _ALL_TOKEN = pyp.CaselessKeyword('all')
   _DISTINCT_TOKEN = pyp.CaselessKeyword('distinct')
@@ -161,6 +172,7 @@ class SQLParser(object):
   _USING_TOKEN = pyp.CaselessKeyword('using')
   _STRAIGHT_JOIN_TOKEN = pyp.CaselessKeyword('straight_join')
 
+  _LIKE_TOKEN = pyp.CaselessKeyword('like')
   _ENGINE_TOKEN = pyp.CaselessKeyword('engine')
   _IF_TOKEN = pyp.CaselessKeyword('if').suppress()
   _EXISTS_TOKEN = pyp.CaselessKeyword('exists').suppress()
@@ -183,6 +195,13 @@ class SQLParser(object):
   _USE_TOKEN = pyp.CaselessKeyword('use')
   _IGNORE_TOKEN = pyp.CaselessKeyword('ignore')
   _FORCE_TOKEN = pyp.CaselessKeyword('force')
+  _CONSTRAINT_TOKEN = pyp.CaselessKeyword('constraint')
+  _FOREIGN_TOKEN = pyp.CaselessKeyword('foreign')
+  _RESTRICT_TOKEN = pyp.CaselessKeyword('restrict')
+  _CASCADE_TOKEN = pyp.CaselessKeyword('cascade')
+  _NO_TOKEN = pyp.CaselessKeyword('no')
+  _ACTION_TOKEN = pyp.CaselessKeyword('action')
+  _REFERENCES_TOKEN = pyp.CaselessKeyword('references')
 
   _TINYINT_TOKEN = pyp.CaselessKeyword('tinyint')
   _SMALLINT_TOKEN = pyp.CaselessKeyword('smallint')
@@ -209,7 +228,7 @@ class SQLParser(object):
   _CHAR_TOKEN = pyp.CaselessKeyword('char')
   _VARCHAR_TOKEN = pyp.CaselessKeyword('varchar')
   _BINARY_TOKEN = pyp.CaselessKeyword('binary')
-  _VARBINARY_TOKEN = pyp.CaselessKeyword('binary')
+  _VARBINARY_TOKEN = pyp.CaselessKeyword('varbinary')
 
   _TINYBLOB_TOKEN = pyp.CaselessKeyword('tinyblob')
   _BLOB_TOKEN = pyp.CaselessKeyword('blob')
@@ -222,6 +241,8 @@ class SQLParser(object):
 
   _ENUM_TOKEN = pyp.CaselessKeyword('enum')
   _SET_TOKEN = pyp.CaselessKeyword('set')
+
+  _BIT_TOKEN = pyp.CaselessKeyword('bit')
 
   _FIRST_TOKEN = pyp.CaselessKeyword('first')
   _BEFORE_TOKEN = pyp.CaselessKeyword('before')
@@ -317,6 +338,9 @@ class SQLParser(object):
                   | _MEDIUMBLOB_TOKEN
                   | _LONGBLOB_TOKEN).setResultsName('type_type')
 
+  _BIT = (_BIT_TOKEN.setResultsName('type_type')
+          + pyp.Optional(_TYPE_SIZE))
+
   _ENUM = (_ENUM_TOKEN.setResultsName('type_type')
            + _STRING_LIST)
 
@@ -336,7 +360,8 @@ class SQLParser(object):
              | _DEC_TOKEN
              | _FIXED_TOKEN
              | _FLOAT_TOKEN
-             | _DOUBLE_TOKEN + pyp.Optional(_PRECISION_TOKEN))
+             | _DOUBLE_TOKEN + pyp.Optional(_PRECISION_TOKEN)
+             ).setResultsName('type_type')
             + pyp.Optional(_TYPE_PRECISION))
 
   _CHARS = ((_VARCHAR_TOKEN
@@ -346,7 +371,8 @@ class SQLParser(object):
             + pyp.Optional(_TYPE_SIZE)
             + pyp.Optional(_BINARY_TOKEN))
 
-  _TYPE = pyp.Group(_ENUM
+  _TYPE = pyp.Group(_BIT
+                    | _ENUM
                     | _SET_TYPE
                     | _INTS
                     | _REALS
@@ -362,8 +388,8 @@ class SQLParser(object):
 
   _TABLE_NAME_ONLY = _IDENTIFIER.setResultsName('table')
 
-  _TABLE_NAME = pyp.Group(pyp.Optional(_DB_NAME + '.')
-                          + _TABLE_NAME_ONLY).setResultsName('table_spec')
+  _TABLE_NAME = pyp.Group((_DB_NAME + '.' + _TABLE_NAME_ONLY)
+                          | _TABLE_NAME_ONLY).setResultsName('table_spec')
 
   _COLUMN_NAME_WILD = (_IDENTIFIER | '*').setResultsName('column')
 
@@ -419,8 +445,9 @@ class SQLParser(object):
                                  ).setResultsName('column_definition')
 
   _KEY_DEFINITION = pyp.Group(
-      (pyp.Optional(_UNIQUE_TOKEN).setResultsName('key_option')
-       + (_INDEX_TOKEN | _KEY_TOKEN).setResultsName('key_type')
+      (((pyp.Optional(_UNIQUE_TOKEN).setResultsName('key_option')
+         + (_INDEX_TOKEN | _KEY_TOKEN).setResultsName('key_type'))
+        | _UNIQUE_TOKEN.setResultsName('key_type'))
        + pyp.Optional(_IDENTIFIER).setResultsName('key_name')
        + _FIELD_LIST)
       | ((_PRIMARY_TOKEN + _KEY_TOKEN).setResultsName('key_type')
@@ -438,8 +465,48 @@ class SQLParser(object):
          | (pyp.Suppress('(')
             + pyp.delimitedList(_COLUMN_NAME + _COLUMN_DEFINITION)
             + pyp.Suppress(')')))
+      + pyp.ZeroOrMore(_COLUMN_FLAGS)
+      + pyp.Optional(_PRIMARY_TOKEN + _KEY_TOKEN)
       + pyp.Optional(_POSITIONAL)
       ).setResultsName('add_column')
+
+  _REFERENCE_OPTION = pyp.Group(
+      _RESTRICT_TOKEN
+      | _CASCADE_TOKEN
+      | (_SET_TOKEN + _NULL_TOKEN)
+      | (_NO_TOKEN + _ACTION_TOKEN)
+  ).setResultsName('reference_option')
+
+  _CONSTRAINT_DEFINITION = pyp.Group(
+    pyp.Optional(
+        _CONSTRAINT_TOKEN
+        + pyp.Optional(_IDENTIFIER).setResultsName('constraint_name')
+        )
+    + _FOREIGN_TOKEN + _KEY_TOKEN
+    + pyp.Optional(_IDENTIFIER).setResultsName('key_name')
+    + _FIELD_LIST
+    + _REFERENCES_TOKEN
+    + _TABLE_NAME
+    + _FIELD_LIST
+    + pyp.Optional(_ON_TOKEN
+                   + _DELETE_TOKEN
+                   + _REFERENCE_OPTION)
+    + pyp.Optional(_ON_TOKEN
+                   + _UPDATE_TOKEN
+                   + _REFERENCE_OPTION)
+  )
+
+  _ALTER_TABLE_ADD_CONSTRAINT = pyp.Group(
+      _ADD_TOKEN
+      + _CONSTRAINT_DEFINITION
+      ).setResultsName('add_constraint')
+
+  _ALTER_TABLE_DROP_FOREIGN_KEY = pyp.Group(
+      _DROP_TOKEN
+      + _FOREIGN_TOKEN
+      + _KEY_TOKEN
+      + _IDENTIFIER.setResultsName('constraint_name')
+      ).setResultsName('drop_foreign_key')
 
   # ADD [UNIQUE] INDEX | KEY ...
   # ADD UNIQUE ...
@@ -491,6 +558,11 @@ class SQLParser(object):
       + _IDENTIFIER.setResultsName('key_name')
       ).setResultsName('drop_index')
 
+  _ALTER_TABLE_CONVERT = pyp.Group(
+      _CONVERT_TOKEN + _TO_TOKEN + _CHARACTER_TOKEN + _SET_TOKEN
+      + _IDENTIFIER.setResultsName('character_set')
+      ).setResultsName('convert')
+
   # The various ALTER TABLE operations supported:
   # - ADD PRIMARY KEY
   # - ADD INDEX
@@ -501,6 +573,8 @@ class SQLParser(object):
   _ALTER_TABLE_OPERATIONS = pyp.Group(
       _ALTER_TABLE_MODIFY
       | _ALTER_TABLE_ADD_PRIMARY_KEY
+      | _ALTER_TABLE_ADD_CONSTRAINT
+      | _ALTER_TABLE_DROP_FOREIGN_KEY
       | _ALTER_TABLE_ADD_INDEX
       | _ALTER_TABLE_ADD_COLUMN
       | _ALTER_TABLE_CHANGE
@@ -508,6 +582,7 @@ class SQLParser(object):
       | _ALTER_TABLE_DROP_INDEX
       | _ALTER_TABLE_DROP_COLUMN
       | _ALTER_TABLE_ALTER
+      | _ALTER_TABLE_CONVERT
       ).setResultsName('operations')
 
   _ALTER_TABLE_SQL = pyp.Group(_ALTER_TOKEN
@@ -519,6 +594,7 @@ class SQLParser(object):
   # CREATE STATEMENTS
 
   _CREATE_DEFINITION = pyp.Group(_KEY_DEFINITION
+                                 | _CONSTRAINT_DEFINITION
                                  | (_COLUMN_NAME
                                     + _COLUMN_DEFINITION)
                                  ).setResultsName('operation')
@@ -557,6 +633,15 @@ class SQLParser(object):
       + pyp.ZeroOrMore(_TABLE_FLAGS_DEF).setResultsName('table_flags')
       ).setResultsName('create_table')
 
+  _CREATE_TABLE_LIKE_SQL = pyp.Group(
+      _CREATE_TOKEN
+      + _TABLE_TOKEN
+      + pyp.Optional(_CREATE_NO_OVERWRITE)
+      + _TABLE_NAME
+      + _LIKE_TOKEN
+      + _TABLE_NAME
+      ).setResultsName('create_table_like')
+
   # DROP TABLE [IF EXISTS] table
   _DROP_TABLE_SQL = pyp.Group(_DROP_TOKEN
                               + _TABLE_TOKEN
@@ -593,7 +678,7 @@ class SQLParser(object):
   _BINOP1 = pyp.oneOf("* / %")
   _BINOP2 = pyp.oneOf("+ - << >> | &")
   _BINOP3 = pyp.oneOf(":= = != <> < > >= <=")
-  _BINOP4 = pyp.oneOf("like between", caseless=True)  # optional "NOT"
+  _BINOP4 = pyp.oneOf("like between regexp", caseless=True)  # optional "NOT"
   _BINOP5 = pyp.oneOf("and", caseless=True)
   _BINOP6 = pyp.oneOf("or", caseless=True)
 
@@ -678,12 +763,16 @@ class SQLParser(object):
          | (_EXPRESSION + _CASES_LIST))
       + _END_TOKEN).setResultsName('case')
 
+  _UNARY = (
+      _NOT_TOKEN
+      | '!'
+      | '-')
+
   _EXPRESSION0 = (
-      pyp.Group((_NOT_TOKEN | '!') + _LVAL).setResultsName('not')
-      | _IS_EXPRESSION
+      _IS_EXPRESSION
       | _IN_EXPRESSION
       | _CASE_EXPRESSION
-      | _LVAL)
+      | (pyp.Optional(_UNARY) + _LVAL))
 
   _EXPRESSION1 = (
       pyp.Group(_EXPRESSION0
@@ -775,7 +864,7 @@ class SQLParser(object):
       + pyp.Optional(_JOIN_CONDITION)).setResultsName('tablejoin')
 
   _TABLE_REFERENCE = _TABLE + pyp.ZeroOrMore(_TABLE_JOIN)
-  _TABLE_REFERENCES = pyp.delimitedList(_TABLE_REFERENCE)
+  _TABLE_REFERENCES = pyp.Group(pyp.delimitedList(_TABLE_REFERENCE))
 
 
   # DATA MANIPULATION COMMONS
@@ -813,10 +902,11 @@ class SQLParser(object):
 
   # SELECT STATEMENTS
 
-  _SELECT_EXPRESSION = pyp.Group(
+  _SELECT_EXPRESSION = (pyp.Group(
       _EXPRESSION.setResultsName('select_expression')
       + pyp.Optional(_AS_TOKEN
                      + _IDENTIFIER.setResultsName('alias')))
+                        | pyp.Suppress('*'))
 
   _SELECT_FROM = pyp.Group(_FROM_TOKEN
                            + _TABLE_REFERENCES).setResultsName('select_from')
@@ -912,14 +1002,25 @@ class SQLParser(object):
                                  ).setResultsName('delete')
 
   # DELETE table FROM table_references [WHERE ...]
-  # DELETE FROM table USING table_references [WHERE ...]
   _DELETE_MULTI_SQL = pyp.Group(_DELETE_TOKEN
-                                + pyp.Optional(_TABLE_NAME_ONLY
-                                               + pyp.Optional('.*'))
+                                + pyp.delimitedList(_TABLE_NAME
+                                                    + pyp.Optional('.*'))
                                 + _FROM_TOKEN
-                                + pyp.Optional(_TABLE_REFERENCES)
-                                + pyp.Optional(_WHERE)
+                                + _TABLE_REFERENCES.setResultsName('exclude')
+                                + (pyp.Group(pyp.Optional(_WHERE))
+                                   .setResultsName('exclude'))
                                 ).setResultsName('delete')
+
+  # DELETE FROM table USING table_references [WHERE ...]
+  _DELETE_MULTI_SQL2 = pyp.Group(_DELETE_TOKEN
+                                 + _FROM_TOKEN
+                                 + pyp.delimitedList(_TABLE_NAME
+                                                     + pyp.Optional('.*'))
+                                 + _USING_TOKEN
+                                 + _TABLE_REFERENCES.setResultsName('exclude')
+                                 + (pyp.Group(pyp.Optional(_WHERE))
+                                    .setResultsName('exclude'))
+                                 ).setResultsName('delete')
 
   # TRANSACTIONS
   _START_TRANSACTION_SQL = pyp.Group((_START_TOKEN + _TRANSACTION_TOKEN)
@@ -947,12 +1048,18 @@ class SQLParser(object):
 
   # MAIN
 
-  _STATEMENT << pyp.Group(_ALTER_TABLE_SQL | _CREATE_TABLE_SQL
-                          | _DROP_TABLE_SQL | _RENAME_TABLE_SQL
-                          | _SELECT_SQL | _UPDATE_SQL | _INSERT_SQL
+  _STATEMENT << pyp.Group(_ALTER_TABLE_SQL
+                          | _CREATE_TABLE_SQL
+                          | _CREATE_TABLE_LIKE_SQL
+                          | _DROP_TABLE_SQL
+                          | _RENAME_TABLE_SQL
+                          | _SELECT_SQL
+                          | _UPDATE_SQL
+                          | _INSERT_SQL
                           | _REPLACE_SQL
-                          | _DELETE_SIMPLE_SQL
                           | _DELETE_MULTI_SQL
+                          | _DELETE_MULTI_SQL2
+                          | _DELETE_SIMPLE_SQL
                           | _TRUNCATE_SQL
                           | _START_TRANSACTION_SQL
                           | _END_TRANSACTION_SQL

@@ -46,16 +46,12 @@ class Error(Exception): pass
 
 
 class ValidationError(Error):
-  def __init__(self, char, lineno, col, msg):
-    self.char = char
-    self.lineno = lineno
-    self.col = col
+  def __init__(self, msg, loc):
     self.msg = msg
+    self.loc = loc
 
   def __str__(self):
-    # Match the pyparsing exception string format
-    return '%s (at char %d), (line:%d, col:%d)' % (self.msg, self.char,
-                                                   self.lineno, self.col)
+    return '%s (at char %d)' % (self.msg, self.loc)
 
 
 ParseError = parser.ParseError
@@ -96,29 +92,28 @@ class Validator(object):
     self._warnings = []
     self._loc = 0
 
-  def ValidateTree(self, queries, string=None, additional_visitors=(),
+  def ValidateTree(self, queries, additional_visitors=(),
                    max_alter_rows=100000, # for AlterChecker
                    allowed_engines=('InnoDB',), # for CreateTableChecker
+                   fail_fast=False,
                    ):
     """Validate a parse tree.
 
     Args:
       tokens: pyparsing parse tree
-      string: Original string, used for finding problem locations
 
     Returns:
       Whether the tree validated
     """
     visitors = [
-        ShardSetChecker(self._schema, string),
-        AlterChecker(self._schema, string, max_alter_rows=max_alter_rows),
-        CreateDatabaseChecker(self._schema, string),
-        DropDatabaseChecker(self._schema, string),
-        CreateTableChecker(self._schema, string,
-                           allowed_engines=allowed_engines),
-        DropTableChecker(self._schema, string),
-        ReplaceChecker(self._schema, string),
-        ColumnChecker(self._schema, string),
+        ShardSetChecker(self._schema),
+        AlterChecker(self._schema, max_alter_rows=max_alter_rows),
+        CreateDatabaseChecker(self._schema),
+        DropDatabaseChecker(self._schema),
+        CreateTableChecker(self._schema, allowed_engines=allowed_engines),
+        DropTableChecker(self._schema),
+        ReplaceChecker(self._schema),
+        ColumnChecker(self._schema),
     ] + list(additional_visitors)
 
     # We iterate query-by-query, so each visitor can modify the token tree and
@@ -129,15 +124,20 @@ class Validator(object):
       logging.debug('Visiting: %s', query)
       for visitor in visitors:
         visitor.visit([query])
+        if fail_fast and (visitor.Errors() or visitor.Warnings()):
+          self._Finalize(visitors)
+          return False
       if self._callback:
         self._callback(self._loc)
 
+    self._Finalize(visitors)
+    return not self._errors and not self._warnings
+
+  def _Finalize(self, visitors):
     for visitor in visitors:
       visitor.Finalize()
       self._errors.extend(visitor.Errors())
       self._warnings.extend(visitor.Warnings())
-
-    return not self._errors and not self._warnings
 
   def Errors(self):
     return self._errors
@@ -153,7 +153,7 @@ class Validator(object):
     """Parse a string and validate."""
     schemaparser = parser_class(progress_callback=self._OnParseStatement)
     tokens = schemaparser.ParseString(string)
-    return self.ValidateTree(tokens, string, **kwargs)
+    return self.ValidateTree(tokens, **kwargs)
 
 
 class Visitor(object):
@@ -168,10 +168,9 @@ class Visitor(object):
     Intra-statement, intra-Visitor: In visit()'s kwargs
   """
 
-  def __init__(self, db_schema, parsed_string):
+  def __init__(self, db_schema):
     self._errors = []
     self._warnings = []
-    self._parsed_str = parsed_string.lower()
     self._db_schema = db_schema
     self._stack = []  # tag names down the tree to our current traversal point
 
@@ -205,6 +204,16 @@ class Visitor(object):
         return True
     return False
 
+  def _GetTableAliases(self, tokens):
+    table_aliases = {}
+    for table in self._GetDescendants(tokens, 'table_spec', ['source_select']):
+      table_aliases[table['table'][0]] = table
+    for alias in self._GetDescendants(tokens, 'table_alias', ['source_select']):
+      alias_name = alias.get('alias')
+      if alias_name:
+        table_aliases[alias_name[0]] = alias['table_spec']
+    return table_aliases
+
   def visit(self, tokens, **kwargs):
     """Default visit method.
 
@@ -221,12 +230,9 @@ class Visitor(object):
   def AddError(self, token, msg):
     """Mark that an error has been detected in the input."""
     if token and token.loc:
-      ex = ValidationError(token.loc,
-                           pyp.lineno(token.loc, self._parsed_str),
-                           pyp.col(token.loc, self._parsed_str),
-                           msg)
+      ex = ValidationError(msg, token.loc)
     else:
-      ex = ValidationError(-1, -1, -1, msg)
+      ex = ValidationError(msg, -1)
     logging.error('%s', ex)
     logging.error('%s', traceback.format_stack()[-2])
     self._errors.append(ex)
@@ -234,12 +240,9 @@ class Visitor(object):
   def AddWarning(self, token, msg):
     """Mark that an error has been detected in the input."""
     if token.loc:
-      ex = ValidationError(token.loc,
-                           pyp.lineno(token.loc, self._parsed_str),
-                           pyp.col(token.loc, self._parsed_str),
-                           msg)
+      ex = ValidationError(msg, token.loc)
     else:
-      ex = ValidationError(-1, -1, -1, msg)
+      ex = ValidationError(msg, -1)
     logging.warn('%s', ex)
     self._warnings.append(ex)
 
@@ -312,7 +315,7 @@ class AlterChecker(Visitor):
       self.AddError(tokens, 'ALTER should be run on all shards')
 
     table_spec = self._GetDescendants(tokens, 'table_spec')
-    assert len(table_spec) == 1, 'ALTER requires exactly one table_spec'
+    assert table_spec, 'ALTER requires at least one table_spec'
 
     try:
       table = self._db_schema.FindTableFromSpec(table_spec[0])
@@ -478,6 +481,29 @@ class CreateTableChecker(Visitor):
       self.AddError(tokens, 'CREATE invalid engine: %s' % engine)
     table.SetEngine(engine)
 
+  def visit_create_table_like(self, tokens, running_scheme):
+    if running_scheme and self._GetDescendants(running_scheme, 'shard'):
+      self.AddError(tokens, 'CREATE should be run on all shards')
+
+    new_spec, old_spec = self._GetDescendants(tokens, 'table_spec')
+    try:
+      old_table = self._db_schema.FindTableFromSpec(old_spec)
+    except schema.UnknownNameException:
+      self.AddError(tokens, 'Unknown table %s' % old_spec)
+      return
+
+    try:
+      new_table = self._db_schema.FindTableFromSpec(new_spec)
+      self.AddError(tokens, 'Table %s already exists' % new_table)
+    except schema.UnknownNameException:
+      db = self._db_schema.FindDatabaseFromSpec(new_spec)
+      new_table = db.AddTable(new_spec['table'][0],
+                              char_set=old_table.GetCharacterSet())
+      new_table.SetEngine(old_table.GetEngine())
+      for column_name, column in old_table.GetColumns().iteritems():
+        new_table.AddColumn(
+            column_name, column.GetType(), column.GetCharacterSet())
+
   @OnlyIfDescendedFrom(['create_table'])
   def visit_operation(self, tokens, table):
     """Add a column definition to a table declaration.
@@ -547,16 +573,6 @@ class ReplaceChecker(Visitor):
 class ColumnChecker(Visitor):
   """Validate that columns used in DML contexts exist."""
 
-  def _GetTableAliases(self, tokens):
-    table_aliases = {}
-    for alias in self._GetDescendants(tokens, 'table_alias', ['source_select']):
-      alias_name = alias.get('alias')
-      if alias_name:
-        table_aliases[alias_name[0]] = alias['table_spec']
-    for table in self._GetDescendants(tokens, 'table_spec', ['source_select']):
-      table_aliases[table['table'][0]] = table
-    return table_aliases
-
   def visit_statement(self, tokens):
     self.visit(tokens, table_aliases=self._GetTableAliases(tokens))
 
@@ -569,7 +585,7 @@ class ColumnChecker(Visitor):
     try:
       self._db_schema.FindTableFromSpec(tokens, table_aliases)
     except schema.UnknownNameException:
-      self.AddError(tokens, 'Unknown table')
+      self.AddError(tokens, 'Unknown table: %s' % tokens)
 
   @OnlyIfDescendedFrom(['insert', 'update', 'delete', 'replace', 'select'])
   def visit_column_spec(self, tokens, table_aliases):
@@ -585,14 +601,14 @@ class ColumnChecker(Visitor):
         try:
           table = self._db_schema.FindTableFromSpec(table_spec)
         except schema.UnknownNameException:
-          self.AddError(tokens, 'Unknown table')
+          self.AddError(tokens, 'Unknown table: %s' % table_spec)
           continue
         try:
           results.add(table.FindColumn(column_name))
         except schema.UnknownNameException:
           pass
       if not results:
-        self.AddError(tokens, 'Unknown column')
+        self.AddError(tokens, 'Unknown column: %s' % column_name)
       elif self.IsDescendedFrom(['using']):
         if len(results) != 2:
           self.AddError(tokens,
@@ -603,7 +619,8 @@ class ColumnChecker(Visitor):
                       'Ambiguous column: %s' % [str(r) for r in results])
     except schema.UnknownNameException:
       # Enough info, but doesn't exist
-      self.AddError(tokens, 'Unknown column')
+      self.AddError(tokens, 'Unknown column: %s' % tokens)
+
 
 class TouchChecker(Visitor):
   """Warn when a particular table/column is touched."""
@@ -619,22 +636,30 @@ class TouchChecker(Visitor):
   def visit_statement(self, tokens):
     tables = set()
     if self._tables:
-      tables = set(str(x[0]) for x in self._GetDescendants(tokens, 'table'))
+      table_tokens = self._GetDescendants(
+          tokens, 'table', do_not_cross=('exclude',))
+      table_aliases = self._GetTableAliases(tokens)
+      for table in table_tokens:
+        table_name = str(table[0])
+        if table_name in table_aliases:
+          table_name = str(table_aliases[table_name]['table'][0])
+        tables.add(table_name)
       if not self._tables & tables:
         # No tables in common
         return
 
     columns = set()
     if self._columns:
-      columns = set(str(x[0]).lower()
-                    for x in self._GetDescendants(tokens, 'column'))
+      columns = set(str(x[0]).lower() for x in self._GetDescendants(
+          tokens, 'column', do_not_cross=('exclude',)))
       if not self._columns & columns:
         # No columns in common
         return
 
     values = set()
     if self._values:
-      values = set(str(x[0]) for x in self._GetDescendants(tokens, 'val'))
+      values = set(str(x[0]) for x in self._GetDescendants(
+          tokens, 'val', do_not_cross=('exclude',)))
       if not self._values & values:
         # No values in common
         return
