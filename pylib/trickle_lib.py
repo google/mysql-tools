@@ -230,3 +230,45 @@ class TrickledOperation(object):
   def _LogFinish(self, rows_copied, start_time):
     logging.info("Done: %.2f avg rows/sec",
                  (rows_copied / (time.time() - start_time)))
+
+
+class GeneratorOperation(TrickledOperation):
+  """Adapts blocking functions so they can run within trickle_lib.
+
+  The adapter only requires that users insert a 'yield' statement after each
+  entry in the batch has been processed.
+  """
+
+  def __init__(self, generator, utilization_percent, cycle_time):
+    """Constructor.
+
+    Args:
+      generator: A function, that does work every time every time it is iterated
+          over.
+      utilization_percent: An int, percent of time to spend in _PerformTrickle.
+      cycle_time: interval over which utilization_percent is
+                  calculated per run
+    """
+    TrickledOperation.__init__(self, utilization_percent, cycle_time)
+    self._generator = generator
+    self._finished = False
+
+  def _SetupTrickle(self):
+    pass
+
+  def _FinalizeTrickle(self):
+    pass
+
+  def _Finished(self):
+    return self._finished
+
+  def _PerformTrickle(self, batch_size):
+    processed = 0
+    try:
+      for _ in xrange(batch_size):
+        self._generator.next()
+        processed += 1
+    except StopIteration:
+      self._finished = True
+
+    return processed
