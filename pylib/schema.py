@@ -66,7 +66,7 @@ class Schema(object):
       return
     self._data_set = True
 
-    rows = self._dbh.ExecuteOrDie(
+    rows = self._dbh.ExecuteWithRetry(
         'SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME '
         'FROM INFORMATION_SCHEMA.SCHEMATA '
         'WHERE SCHEMA_NAME != DATABASE()')
@@ -109,14 +109,14 @@ class Schema(object):
   def GetDefaultEngine(self):
     """Find the database's default engine type."""
     if not self._default_table_type:
-      result = self._dbh.ExecuteOrDie("SHOW VARIABLES LIKE 'table_type'")
+      result = self._dbh.ExecuteWithRetry("SHOW VARIABLES LIKE 'table_type'")
       self._default_table_type = result[0]['Value']
     return self._default_table_type
 
   def GetCharacterSet(self):
     """Find the database's (server's) character set."""
     if not self._default_character_set:
-      res = self._dbh.ExecuteOrDie(
+      res = self._dbh.ExecuteWithRetry(
         "SHOW VARIABLES LIKE 'character_set_server'")
       self._default_character_set = res[0]['Value']
     return self._default_character_set
@@ -152,7 +152,7 @@ class Database(object):
       db = self._dbh.Escape(self._name)
     else:
       db = 'DATABASE()'
-    rows = self._dbh.ExecuteOrDie(
+    rows = self._dbh.ExecuteWithRetry(
         'SELECT TABLE_NAME, '
         'SUBSTRING_INDEX(table_collation, \'_\', 1) AS CHARSET '
         'FROM INFORMATION_SCHEMA.TABLES WHERE '
@@ -184,7 +184,7 @@ class Database(object):
     """Find the database's default character set."""
     if not self._character_set:
       sql = "SHOW VARIABLES LIKE 'character_set_database'"
-      result = self._dbh.ExecuteOrDie(sql)
+      result = self._dbh.ExecuteWithRetry(sql)
       self._character_set = result[0]['Value']
     return self._character_set
 
@@ -228,7 +228,7 @@ class Table(object):
     db_name = self._database.GetDbName()
     table_name = self._dbh.Escape(self._name)
     sql = sql % {'db':db_name, 'table':table_name}
-    cols = self._dbh.ExecuteOrDie(sql)
+    cols = self._dbh.ExecuteWithRetry(sql)
     for col in cols:
       self.AddColumn(col['COLUMN_NAME'], col['COLUMN_TYPE'],
                      col['CHARACTER_SET_NAME'])
@@ -245,13 +245,17 @@ class Table(object):
       prefix = 'SHOW TABLE STATUS FROM %s' % db
     else:
       prefix = 'SHOW TABLE STATUS'
-    rows = self._dbh.ExecuteMerged(prefix + ' WHERE Name=%(name)s',
-                                   { 'name': self._name })
-    engines = set(row['Engine'] for row in rows)
+    rows = self._dbh.ExecuteWithRetry(prefix + ' WHERE Name=%(name)s',
+                                      { 'name': self._name },
+                                      execute=self._dbh.ExecuteMerged)
+    engines = set()
+    self._rows = 0
+    for row in rows:
+      engines.add(row['Engine'])
+      self._rows = max(self._rows, row['Rows'])
     assert len(engines) == 1, (
         'Engine for table %s differs between shards' % self)
     self._engine = engines.pop()
-    self._rows = max(int(row['Rows']) for row in rows)
 
   def _FetchPrimaryKey(self):
     """Return the list of column names that comprise a table's PRIMARY KEY."""
@@ -263,7 +267,7 @@ class Table(object):
     db_name = self._database.GetDbName()
     table_name = self._dbh.Escape(self._name)
     sql = sql % {'db':db_name, 'table':table_name}
-    res = self._dbh.ExecuteOrDie(sql)
+    res = self._dbh.ExecuteWithRetry(sql)
     self._primary_key = [row['column_name'] for row in res]
 
   def AddColumn(self, column_name, column_type, char_set=None):
@@ -335,4 +339,4 @@ class Column(object):
     return self._type
 
   def GetCharacterSet(self):
-    return self._char_set
+    return self._character_set
