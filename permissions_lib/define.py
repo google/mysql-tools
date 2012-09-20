@@ -76,6 +76,10 @@ class InvalidPrivileges(Error):
   """Raised when invalid privilege combinations are attempted."""
 
 
+class InvalidUsername(Error):
+  """Raised when an invalid username is set."""
+
+
 class InvalidKey(Error):
   """Raised when an unknown field or comment name is used in SetFields."""
 
@@ -104,7 +108,7 @@ class DecryptionFailed(Error):
   """Raised when decryption fails, due to invalid key or data."""
 
 
-_TOTAL_PRIVS = 26
+_TOTAL_PRIVS = 28
 _PRIVS = [2**x for x in xrange(_TOTAL_PRIVS)]
 (
     SELECT,
@@ -133,6 +137,8 @@ _PRIVS = [2**x for x in xrange(_TOTAL_PRIVS)]
     CREATE_ROUTINE,
     ALTER_ROUTINE,
     CREATE_USER,
+    EVENT,
+    TRIGGER,
 ) = _PRIVS
 
 
@@ -178,6 +184,8 @@ _FIELD_NAMES = {
     CREATE_ROUTINE:    'Create_routine_priv',
     ALTER_ROUTINE:     'Alter_routine_priv',
     CREATE_USER:       'Create_user_priv',
+    EVENT:             'Event_priv',
+    TRIGGER:           'Trigger_priv',
 }
 
 
@@ -194,6 +202,7 @@ _FIELD_SET_NAMES = {
     ALTER:             'Alter',
     CREATE_VIEW:       'Create View',
     SHOW_VIEW:         'Show view',
+    TRIGGER:           'Trigger',
 }
 
 
@@ -459,19 +468,18 @@ class _ColumnPermission(_BasePermission, _SetPrivsMixIn):
     if not dbh:
       raise NeedDBAccess('Need to retrieve column list from %s.%s' %
                          (str(fixed_values['Db']), fixed_values['Table_name']))
-    if fixed_values['Db'] == DEFAULT:
-      result = dbh.CachedExecuteOrDie('SHOW FIELDS FROM `%s`' %
-                                      fixed_values['Table_name'])
-    else:
-      result = dbh.CachedExecuteOrDie('SHOW FIELDS FROM `%s`.`%s`' %
-                                      (fixed_values['Db'],
-                                       fixed_values['Table_name']))
-    return [row['Field'] for row in result]
+    result = dbh.CachedExecuteOrDie(
+        'SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE'
+        ' TABLE_SCHEMA=%(Db)s AND'
+        ' TABLE_NAME=%(Table_name)s',
+        fixed_values)
+    return [row['COLUMN_NAME'] for row in result]
 
 
 class _TablePermission(_BasePermission, _SetPrivsMixIn):
   _valid_privs = (SELECT | INSERT | UPDATE | DELETE | CREATE | DROP | GRANT |
-                  REFERENCES | INDEX | ALTER | CREATE_VIEW | SHOW_VIEW)
+                  REFERENCES | INDEX | ALTER | CREATE_VIEW | SHOW_VIEW |
+                  TRIGGER)
   _child_class = _ColumnPermission
   _table_name = 'tables_priv'
   _entity_field = 'Table_name'
@@ -528,7 +536,7 @@ class _DatabasePermission(_BasePermission, _ColumnPrivsMixIn):
   _valid_privs = (SELECT | INSERT | UPDATE | DELETE | CREATE | DROP | GRANT |
                   REFERENCES | INDEX | ALTER | CREATE_TEMP_TABLE |
                   LOCK_TABLES | CREATE_VIEW | SHOW_VIEW | CREATE_ROUTINE |
-                  ALTER_ROUTINE | EXECUTE)
+                  ALTER_ROUTINE | EXECUTE | EVENT | TRIGGER)
   _child_class = _TablePermission
   _fixed_fields = ['Host', 'Db', 'User']
   _table_name = 'db'
@@ -550,7 +558,7 @@ class _UserPermission(_BasePermission, _ColumnPrivsMixIn):
                   ALTER | SHOW_DATABASES | SUPER | CREATE_TEMP_TABLE |
                   LOCK_TABLES | EXECUTE | REPL_SLAVE | REPL_CLIENT |
                   CREATE_VIEW | SHOW_VIEW | CREATE_ROUTINE | ALTER_ROUTINE |
-                  CREATE_USER)
+                  CREATE_USER | EVENT | TRIGGER)
   _child_class = _DatabasePermission
   _fixed_fields = ['Host', 'User', 'Password']
   _table_name = 'user'
@@ -620,6 +628,25 @@ class Account(object):
                   encrypted_hash=encrypted_hash)
     self.SetFields(**kwargs)
 
+  def _ValidateUsername(self, username):
+    """Validate the username based on MySQL's constraints.
+
+    This currently only raises an exception for usernames that are
+    too long.  This is a hardcoded limit in MySQL.  It is probably a
+    good idea to limit usernames to ascii-only.  More info on username
+    limitations can be found here:
+
+    http://dev.mysql.com/doc/refman/5.1/en/user-names.html
+
+    Args:
+      username: the username to validate.
+
+    Raises:
+      InvalidUsername
+    """
+    if len(username) > 16:
+      raise InvalidUsername('username "%s" is too long' % username)
+
   @_KeywordArgumentsOnly
   def InitUser(self, username=None, password_hash=None, password=None,
                encrypted_hash=None):
@@ -642,6 +669,7 @@ class Account(object):
     """
     if username is not None:
       self._username = username
+      self._ValidateUsername(username)
       self._perm.SetEntityName(username)
     if password_hash is not None:
       self._password_hash = password_hash
@@ -650,6 +678,8 @@ class Account(object):
     elif encrypted_hash is not None:
       self._password_hash = None  # Set by Decrypt()
       self._encrypted_hash = encrypted_hash
+      if not utils.TestEncryptedHash(self._encrypted_hash):
+        raise DecryptionFailed('%s has invalid encrypted hash' % self._username)
     return self
 
   @_KeywordArgumentsOnly
@@ -935,12 +965,16 @@ class Account(object):
       self._perm.PopulateTables(ret, fixed_values)
 
     for key in sorted(self._extra_fields.iterkeys()):
-      ret['user'].AddField(key, str(self._extra_fields[key]))
+      ret['user'].AddField(key, self._extra_fields[key])
 
     if self._password_hash is None:
       del ret['user']
 
     return ret
+
+  def GetComment(self, comment_name, default=None):
+    """Fetch the value for a given comment name."""
+    return self._comments.get(comment_name, default)
 
 
 class Set(object):
@@ -1021,6 +1055,11 @@ class Set(object):
     """Decrypt hashes for all accounts in this set."""
     for account in self._accounts.itervalues():
       account.Decrypt(key)
+
+  def GetComments(self, comment_names, username):
+    """Fetch a list of comment values for a username."""
+    return (self._accounts[username].GetComment(comment_name)
+            for comment_name in comment_names)
 
 
 # For use by code defining permissions:

@@ -137,7 +137,7 @@ class PermissionsFile(object):
 
   _lock = threading.Lock()
 
-  def __init__(self, permissions_contents, private_keyfile=None):
+  def __init__(self, permissions_contents=None, private_keyfile=None):
     """Load the permissions definitions.
 
     Args:
@@ -146,22 +146,33 @@ class PermissionsFile(object):
       private_keyfile: Path to a file containing the private RSA key to be
         used to decrypt encrypted_hash values from permissions_contents.
     """
-    code = compile(permissions_contents, 'permissions contents', 'exec')
+    self._sets = {}
 
-    # TODO(flamingcow): There is a race when instantiating two instances of
-    # PermissionsFile at once. We need a better way to return values from
-    # define.py than a global.
-    with self._lock:
-      self.globals = define.__dict__
-      # Reset define's global state. This makes multiple instantiations of
-      # PermissionsFile work.
-      self.globals['SETS'].clear()
-      exec(code, self.globals)
-      self._sets = self.globals['SETS'].copy()
+    if permissions_contents:
+      self.Parse(permissions_contents)
+
     if private_keyfile:
       self._decryption_key = utils.PrivateKeyFromFile(private_keyfile)
     else:
       self._decryption_key = None
+
+  def Parse(self, permissions_contents):
+    code = compile(permissions_contents, 'permissions contents', 'exec')
+
+    # TODO(flamingcow): There is a race when using two instances of
+    # PermissionsFile at once. We need a better way to return values from
+    # define.py than a global.
+    with self._lock:
+      # This is self.globals as a backwards-compat hack, because there are some
+      # users of this class that want to get at things from the permissions file
+      # other than SETS.
+      self.globals = define.__dict__
+      # Reset define's global state. This makes multiple instantiations of
+      # PermissionsFile work.
+      self.globals['SETS'].clear()
+      self.globals['SETS'].update(self._sets)
+      exec(code, self.globals)
+      self._sets = self.globals['SETS'].copy()
 
   def GetSetTables(self, dbh, set_name):
     """Generate a table set for each account, then merge them all together."""
@@ -170,25 +181,114 @@ class PermissionsFile(object):
     return self._sets[set_name].GetTables(dbh)
 
   @staticmethod
-  def GetSQL(tables, delete_where=None, map=None, extended_insert=True):
+  def _GetTableDiffSQL(dbh, old_table, new_table, name):
+    """Generate SQL to apply the difference between two tables."""
+    fields = list(old_table.GetFields())
+    try:
+      db_index = fields.index('Db')
+    except ValueError:
+      pass
+    else:
+      for row in old_table.GetRows():
+        if row[db_index] == 'DATABASE()':
+          row[db_index] = define.DEFAULT
+    old_rows = old_table - new_table
+    new_rows = new_table - old_table
+    args = {}
+    args['db'], args['table'] = name.split('.', 1)
+    query = """
+SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE
+  TABLE_SCHEMA=%(db)s AND
+  TABLE_NAME=%(table)s AND
+  CONSTRAINT_NAME='PRIMARY'
+  ORDER BY ORDINAL_POSITION ASC;
+"""
+    key_fields = [row['COLUMN_NAME'] for row
+                  in dbh.CachedExecuteOrDie(query, args)]
+    for sql in old_rows.GetDeleteSQLList(name, fields=key_fields):
+      yield sql
+    for sql in new_rows.GetInsertSQLList(name, max_size=2**20):
+      yield sql
+
+  @classmethod
+  def _GetIncrementalTableSQL(cls, dbh, table, name, delete_where):
+    """Generate SQL to make incremental changes that result in table."""
+    fields = list(table.GetFields())
+    try:
+      db_index = fields.index('Db')
+    except ValueError:
+      db_index = -1
+    if db_index >= 0:
+      fields[db_index] = "IF(Db = DATABASE(), 'DATABASE()', Db) AS Db"
+
+    if not isinstance(dbh, db.MultiConnection):
+      # Single shard
+      query = 'SELECT %s FROM %s WHERE %s;' % (
+          ','.join(fields), name, delete_where)
+      old_table = dbh.ExecuteOrDie(query)
+      return cls._GetTableDiffSQL(dbh, old_table, table, name)
+
+    # Multiple shards
+
+    # If we have Google MySQL extensions available, verify that all shards
+    # match, then only fetch data from one shard.
+    fields_copy = list(fields)
+    if db_index >= 0:
+      fields_copy[db_index] = "IF(Db = DATABASE(), 'DATABASE()', Db)"
+    check_query = 'SELECT ORDERED_CHECKSUM(%s) FROM %s WHERE %s;' % (
+        ','.join(fields_copy), name, delete_where)
+    try:
+      dbh.ExecuteOrDie(check_query)
+    except db.QueryErrorsException:
+      # Google extensions not available, fall back to all shards.
+      logging.info('Google SQL extensions not available; pulling data from all '
+                   'shards')
+      query = 'SELECT %s FROM %s WHERE %s;' % (
+          ','.join(fields), name, delete_where)
+      old_table = dbh.ExecuteOrDie(query)
+      return cls._GetTableDiffSQL(dbh, old_table, table, name)
+    except db.InconsistentResponses:
+      # Shards differ, fall back to non-incremental.
+      logging.info('%s differs across shards; falling back to non-incremental',
+                   name)
+      return cls._GetFullTableSQL(table, name, delete_where)
+
+    # All shards match
+    query = 'ON SHARD 0 SELECT %s FROM %s WHERE %s;' % (
+        ','.join(fields), name, delete_where)
+    old_table = dbh.ExecuteOrDie(query)
+    return cls._GetTableDiffSQL(dbh, old_table, table, name)
+
+  @staticmethod
+  def _GetFullTableSQL(table, name, delete_where):
+    """Generate SQL to delete and rebuild table contents."""
+    if delete_where:
+      yield 'DELETE FROM %s WHERE %s;' % (name, delete_where)
+    for sql in table.GetInsertSQLList(name, max_size=2**20):
+      yield sql
+
+  @classmethod
+  def GetSQL(cls, dbh, tables, delete_where=None, map=None, incremental=True):
     """Generate an ordered list of SQL statements to push these permissions.
 
     Args:
+      dbh: Database connection handle, used to build diffs against existing
+        table contents.
       tables: dict of table name -> VirtualTable instance
       delete_where: a WHERE clause to apply to the DELETE statement; if not
         specified, no DELETEs are emitted.  Specify '1' to delete all rows.
       map: mapping dict from keys in tables to database table names
-      extended_insert: If false, one INSERT row per statement.
     """
     sql = []
     for name, table in tables.iteritems():
       if map:
         name = map[name]
-      if delete_where:
-        yield 'DELETE FROM %s WHERE %s;' % (name, delete_where)
-      for sql in table.GetInsertSQLList(name, max_size=2**20,
-                                        extended_insert=extended_insert):
-        yield sql
+      if incremental and dbh:
+        for row in cls._GetIncrementalTableSQL(dbh, table, name, delete_where):
+          yield row
+      else:
+        for row in cls._GetFullTableSQL(table, name, delete_where):
+          yield row
 
   def ValidateResults(self, dbh, where, map=None):
     if map:
@@ -219,7 +319,7 @@ class PermissionsFile(object):
       'user':         'mysql.user',
       }
 
-  def Push(self, dbh, set_name):
+  def Push(self, dbh, set_name, incremental=True):
     """Push the permissions defined by set_name to the live database.
 
     This rewrites the contents of the mysql.* tables for all shards of the
@@ -229,6 +329,8 @@ class PermissionsFile(object):
     Args:
       dbh: A connected database handle (pylib.db).
       set_name: The permissions set name (e.g. "primary", "secondary") to apply.
+      incremental: Whether the publish should attempt to make minimal changes to
+          the destination tables, rather than just wiping them.
 
     Raises:
       NeedDBAccess: if dbh is None
@@ -236,7 +338,8 @@ class PermissionsFile(object):
     if not dbh:
       raise NeedDBAccess
     tables = self.GetSetTables(dbh, set_name)
-    for cmd in self.GetSQL(tables, '1', self.PUSH_MAP):
+    for cmd in self.GetSQL(dbh, tables, '1', self.PUSH_MAP,
+                           incremental=incremental):
       dbh.ExecuteOrDie(cmd)
     self.ValidateResults(dbh, '1', self.PUSH_MAP)
     dbh.ExecuteOrDie('FLUSH LOCAL PRIVILEGES;')
@@ -248,7 +351,8 @@ class PermissionsFile(object):
       'user':         'admin.MysqlPermissionsUser',
       }
 
-  def Publish(self, dbh, set_name, dest_set_name, push_duration=1800):
+  def Publish(self, dbh, set_name, dest_set_name, push_duration=1800,
+              incremental=True, extra_where=None):
     """Publish the permissions defined by set_name to the database.
 
     This "publishes" the permissions to the the database.  The permissions are
@@ -269,42 +373,59 @@ class PermissionsFile(object):
       push_duration: Duration in seconds for the permissions push to last.
           This sets the MysqlPermissionSets.PushDuration column which can be
           used by copiers to decide when to copy.
+      incremental: Whether the publish should attempt to make minimal changes to
+          the destination tables, rather than just wiping them.
     """
     set_id = GetPermissionSetId(dbh, dest_set_name)
     tables = self.GetSetTables(dbh, set_name)
     for table in tables.values():
       table.AddField('MysqlPermissionSetId', set_id)
-    dbh.ExecuteOrDie('BEGIN;')
-    where = 'MysqlPermissionSetId=%s' % dbh.Escape(set_id)
-    for cmd in self.GetSQL(tables, where, self.PUBLISH_MAP):
-      dbh.ExecuteOrDie(cmd)
-    self.ValidateResults(dbh, where, self.PUBLISH_MAP)
-    MarkPermissionsChanged(dbh, set_id, int(push_duration))
-    dbh.ExecuteOrDie('COMMIT;')
+    with dbh.Transaction():
+      where = 'MysqlPermissionSetId=%s' % dbh.Escape(set_id)
+      if extra_where:
+        where = '(%s AND %s)' % (where, extra_where)
+      for cmd in self.GetSQL(dbh, tables, where, self.PUBLISH_MAP,
+                             incremental=incremental):
+        dbh.ExecuteOrDie(cmd)
+      self.ValidateResults(dbh, where, self.PUBLISH_MAP)
+      MarkPermissionsChanged(dbh, set_id, int(push_duration))
 
-  def Dump(self, dbh, set_name, user=None):
+  def Dump(self, dbh, set_name, user=None, incremental=True):
     """Print the SQL statements comprising the named permissions set.
 
     Args:
       dbh: A connected database handle (pylib.db).
       set_name: The permissions set name, e.g. "primary", "secondary".
       user: Dump permissions only for the named account.
+      incremental: Whether the publish should attempt to make minimal changes to
+          the destination tables, rather than just wiping them.
     """
     if user:
       account = self._sets[set_name].GetAccount(user)
       tables = account.GetTables(dbh)
-      print '\n'.join(self.GetSQL(tables, None, self.PUSH_MAP))
+      print '\n'.join(
+          self.GetSQL(dbh, tables, None, self.PUSH_MAP,
+                      incremental=incremental))
     else:
       tables = self.GetSetTables(dbh, set_name)
-      print '\n'.join(self.GetSQL(tables, '1', self.PUSH_MAP))
+      print '\n'.join(
+          self.GetSQL(dbh, tables, '1', self.PUSH_MAP,
+                      incremental=incremental))
 
-  def Test(self, dbh):
+  def Test(self, dbh, incremental=True):
     """Test all defined permissions sets.
 
     Args:
       dbh: A connected database handle (pylib.db).
+      incremental: Whether the publish should attempt to make minimal changes to
+          the destination tables, rather than just wiping them.
     """
     for set in self._sets:
       tables = self.GetSetTables(dbh, set)
-      for _ in self.GetSQL(tables, '1'):
+      for _ in self.GetSQL(dbh, tables, '1', self.PUSH_MAP,
+                           incremental=incremental):
         pass
+
+  def GetSet(self, set_name):
+    """Fetch a set object by name."""
+    return self._sets[set_name]

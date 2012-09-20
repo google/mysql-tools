@@ -24,6 +24,7 @@ import hashlib
 import os
 import random
 import string
+import sys
 
 try:
   from tlslite.utils import compat
@@ -109,6 +110,15 @@ def EncryptPasswordInteractive(public_keyfile):
   print EncryptHash(key, hashed)
 
 
+def TestEncryptedHash(ciphertext):
+  """Test an encrypted hash as much as possible without the key."""
+  try:
+    base64.b64decode(ciphertext)
+    return True
+  except TypeError:
+    return False
+
+
 def DecryptHash(key, ciphertext):
   """Decrypt a hash with a private key."""
   encrypted = base64.b64decode(ciphertext)
@@ -125,3 +135,18 @@ def DecryptHashInteractive(private_keyfile):
   key = PrivateKeyFromFile(private_keyfile)
   encrypted = raw_input('Encrypted string: ')
   print DecryptHash(key, encrypted)
+
+
+def FetchComments(permissions_file, set_name, comment_names, usernames):
+  """Fetch a tuple of (username, comment values) for each username."""
+  set_obj = permissions_file.GetSet(set_name)
+  for username in usernames:
+    yield (username, set_obj.GetComments(comment_names, username))
+
+
+def FetchCommentsInteractive(self, set_name, comment_names):
+  """Read usernames from stdin and print a list of comment values."""
+  usernames = (line.strip() for line in sys.stdin)
+  comment_values = FetchComments(self, set_name, comment_names, usernames)
+  for username, values in comment_values:
+    print '%s\t%s' % (username, '\t'.join(values))
