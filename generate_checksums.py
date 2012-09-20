@@ -50,6 +50,8 @@ flags.DEFINE_string('column_types_to_skip', 'blob,longblob',
                     'Comma separated list of datatypes to skip checksumming')
 flags.DEFINE_multistring('skip_table', [],
                          'Table to skip checksumming')
+flags.DEFINE_multistring('skip_db', ['information_schema', 'adminlocal'],
+                         'Database to skip checksumming')
 flags.DEFINE_multistring('check_table', [],
                          'Comma separated list of tables to checksum')
 flags.DEFINE_multistring('check_engine', ['InnoDB'],
@@ -58,6 +60,8 @@ flags.DEFINE_string('result_table', 'admin.Checksums',
                     'Name of the table containing the resulting checksums')
 flags.DEFINE_string('golden_table', 'admin.ChecksumsGolden',
                     'Name of the db.table for correct checksums results')
+flags.DEFINE_string('log_table', 'admin.ChecksumLog',
+                    'Name of the db.table where we log completed runs')
 flags.DEFINE_string('job_started', None,
                     'Checksum job started timestamp (defaults to now)')
 flags.DEFINE_string('row_condition', '',
@@ -76,6 +80,7 @@ def main(unused_argv):
   db_checksummer = drift_lib.DbChecksummer(dbh=dbh,
                                            result_table=FLAGS.result_table,
                                            golden_table=FLAGS.golden_table,
+                                           log_table=FLAGS.log_table,
                                            job_started=FLAGS.job_started,
                                            scan_rate=FLAGS.scan_rate,
                                            secs_per_query=FLAGS.secs_per_query,
@@ -83,12 +88,10 @@ def main(unused_argv):
                                            hours_to_run=FLAGS.hours_to_run,
                                            utilization=FLAGS.utilization,
                                            tables_to_skip=FLAGS.skip_table,
+                                           databases_to_skip=FLAGS.skip_db,
                                            engines_to_check=FLAGS.check_engine,
                                            tables_to_check=FLAGS.check_table)
-  db_checksummer.PrepareToChecksum()
-  while db_checksummer.ChecksumQuery():
-    time.sleep(db_checksummer.GetNextWait())
-    logging.info(db_checksummer.ReportPerformance())
+  db_checksummer.ChecksumTables()
   dbh.Close()
 
 if __name__ == '__main__':

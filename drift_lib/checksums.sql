@@ -37,3 +37,10 @@ CREATE TABLE IF NOT EXISTS admin.ChecksumsGolden (
   Count int(11) NOT NULL,
   PRIMARY KEY (JobStarted, DatabaseName, TableName, Chunk)
 ) ENGINE=InnoDB DEFAULT CHARSET=latin1;
+
+CREATE TABLE IF NOT EXISTS admin.ChecksumLog (
+  DatabaseName VARCHAR(256) NOT NULL,
+  TableName VARCHAR(256) NOT NULL,
+  LastChecksumTime TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (DatabaseName, TableName)
+) ENGINE = InnoDB;
