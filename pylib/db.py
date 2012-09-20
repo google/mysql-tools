@@ -66,31 +66,39 @@ class Error(Exception):
 
 
 class ResolutionError(Error):
-  pass
+  """Resolution failed"""
 
 
 class InconsistentResponses(Error):
-  pass
+  """Responses differ between shards"""
 
 
 class InconsistentSchema(Error):
-  pass
+  """Result schema differs between shards"""
 
 
 class QueryErrorsException(Error):
-  pass
+  """Query returned error(s)"""
 
 
 class QueryWarningsException(Error):
-  pass
+  """Query returned warning(s)"""
 
 
 class Timeout(Error):
-  pass
+  """Timed out"""
 
 
 class LockLost(Error):
-  pass
+  """Lost lock while executing"""
+
+
+class RetriesExceeded(Error):
+  """Exceeded allowed retry attempts"""
+
+
+class InvalidShard(Error):
+  """Invalid shard number specified"""
 
 
 def GetDefaultConversions():
@@ -99,6 +107,14 @@ def GetDefaultConversions():
 
 
 CONNECTIONS = set()
+_DBSPEC_RE_TEMPLATE = """\
+    ^(?:(?P<dbtype>%s):)?      # Optional dbtype.
+     (?P<host>[^:]+):          # Hostname.
+     (?P<user>[^:]*):          # Username.
+     (?P<password>[^:]*)       # Password.
+     (?::(?P<db>[^:]*))?       # Optional dbname.
+     (?::(?P<port>\d+))?       # Optional port.
+     $"""
 
 
 class Spec(dict):
@@ -116,6 +132,18 @@ class Spec(dict):
 
   # (user, host) -> password
   _PW_CACHE = {}
+
+  @classmethod
+  def _GetDbSpecRe(cls, compiled=True):
+    """Interpolates _DBSPEC_RE_TEMPLATE with self._DB_TYPES.
+
+    Returns:
+      Compiled re pattern if compiled=True, else raw regular expression.
+    """
+    regexp = _DBSPEC_RE_TEMPLATE % ('|'.join(cls._DB_TYPES))
+    if compiled:
+      regexp = re.compile(regexp, re.VERBOSE)
+    return regexp
 
   @classmethod
   def Parse(cls, spec, **kwargs):
@@ -145,21 +173,33 @@ class Spec(dict):
       ValueError: if spec is invalid
     """
 
-    parts = spec.split(':')
-    if parts[0] in cls._DB_TYPES:
-      (parts, dbtype) = (parts[1:], parts[0])
-      kwargs.setdefault('dbtype', dbtype)
-    if len(parts) == 5:
-      (parts, portstr) = (parts[:4], parts[4])
-      kwargs.setdefault('port', int(portstr))
-    if len(parts) != 4:
-      raise ValueError('Invalid DBSpec: wrong number of parts (%d)' %
-                       len(parts))
-    kwargs.setdefault('host', parts[0])
-    if not kwargs.setdefault('user', parts[1]):
+    match = cls._GetDbSpecRe().search(spec)
+    if not match:
+      regexp = cls._GetDbSpecRe(compiled=False)
+      raise ValueError('Invalid DBSpec "%s", does not match re:\n%s' % (
+          spec, regexp))
+    args = match.groupdict()
+
+    if args['dbtype']:
+      kwargs.setdefault('dbtype', args['dbtype'])
+    if args.get('port'):
+      kwargs.setdefault('port', int(args['port']))
+    kwargs.setdefault('host', args['host'])
+
+    if not kwargs.setdefault('user', args['user']):
       kwargs['user'] = os.getenv('USER')
-    kwargs.setdefault('passwd', parts[2])
-    kwargs.setdefault('db', parts[3])
+    if kwargs.setdefault('db', args['db']) is None:
+      kwargs['db'] = ''
+
+    if ((not args['password'] and sys.stdin.isatty())
+        or args['password'] == '?'):
+      userhost = (kwargs['user'], kwargs['host'])
+      if userhost not in cls._PW_CACHE:
+        cls._PW_CACHE[userhost] = getpass.getpass(
+            'Password for %s@%s: ' % userhost)
+      args['password'] = cls._PW_CACHE[userhost]
+
+    kwargs.setdefault('passwd', args['password'])
     return Spec(**kwargs)
 
   def __init__(self, **args):
@@ -178,6 +218,7 @@ class Spec(dict):
         'conv' - Dictionary of python type or MySQL type constant to conversion
           function (optional, defaults to GetDefaultConversions())
     """
+    args.setdefault('db', '')
     args.setdefault('dbtype', self._DEFAULT_DB_TYPE)
     assert args['dbtype'] in self._DB_TYPES, (
         'Unsupported dbtype %s' % args['dbtype'])
@@ -190,14 +231,7 @@ class Spec(dict):
       self['unix_socket'] = self['host'][7:]
       self['host'] = 'localhost'
 
-    # Handle special password syntax
-    if self.get('passwd', '?') in ('', '?') and sys.stdin.isatty():
-      userhost = (self['user'], self['host'])
-      if userhost not in self._PW_CACHE:
-        self._PW_CACHE[userhost] = getpass.getpass(
-            'Password for %s@%s: ' % userhost)
-      self['passwd'] = self._PW_CACHE[userhost]
-    elif self['passwd'].startswith('pfile='):
+    if self['passwd'].startswith('pfile='):
       self['passwd'] = open(self['passwd'][6:]).read().strip()
 
     self._expander = _GetExpander(args['host'], self)
@@ -218,29 +252,18 @@ class Spec(dict):
       result += ':%d' % self.get('port')
     return result
 
-  def IsSingle(self):
-    """Return whether this spec refers to a single host."""
-    return isinstance(self._expander, _NoOpExpander)
-
   def __iter__(self):
     """Iterate over the dbspecs, expanding hosts and dbs."""
-    if self.IsSingle():
-      yield self
-    else:
-      for shard, host in self._expander().iteritems():
-        args = self.copy()
-        if args.get('db'):
-          if ',' in args['db']:
-            args['db'] = args['db'].split(',')[shard]
-          args['db'] = args['db'].replace('#', str(shard))
-        args['host'] = host
-        yield Spec(**args)
+    for shard, host, db in self._expander():
+      args = self.copy()
 
-  def Connect(self):
-    if self.IsSingle():
-      return Connection(**self)
-    else:
-      return MultiConnection(**self)
+      args['db'] = db
+      args['host'] = host
+      yield Spec(**args)
+
+  def Connect(self, connection_class=None):
+    connection_class = connection_class or MultiConnection
+    return connection_class(**self)
 
 
 def Connect(spec, **kwargs):
@@ -269,7 +292,7 @@ class VirtualTable(object):
 
   _contents = 'Rows'
 
-  def __init__(self, fields, result, rowcount=None):
+  def __init__(self, fields, result, rowcount=None, types=None, populate=True):
     """Constructor.
 
     Args:
@@ -277,14 +300,29 @@ class VirtualTable(object):
       result: A list of lists of rows with cell data
       rowcount: Number of rows affected by the query. Ignored if result
                 is non-empty.
+      types: A list of python type classes for fields.
+      populate: Whether to pull all rows in from result now, or wait until
+                Populate() is called. Dirty hack while we implement real
+                streaming support here.
     """
     self._fields = fields
     self._result = []
+    self._types = types or []
     self._rowcount = rowcount
-    for row in result:
+    self._rows = result
+    if populate:
+      self.Populate()
+
+  # TODO(flamingcow): This is ugly; we should only pull rows when we need them.
+  def Populate(self):
+    """Read in rows and store them internally."""
+    for row in self._rows:
       self.Append(row)
 
   def __getitem__(self, i):
+    if isinstance(i, slice):
+      return VirtualTable(self.GetFields(), self._result[i],
+                          types=self.GetTypes())
     return dict(zip(self._fields, self._result[i]))
 
   def __len__(self):
@@ -307,14 +345,11 @@ class VirtualTable(object):
         self._contents, len(self._result), '\n*****\n'.join(rows))
 
   def __sub__(self, y):
-    y_hashes = set(hash(tuple(row)) for row in y.GetRows())
-    new = VirtualTable(self.GetFields(), [])
-    for row in self.GetRows():
-      if hash(tuple(row)) not in y_hashes:
-        new.Append(row)
-    return new
+    x_rows = set(tuple(row) for row in self.GetRows())
+    y_rows = set(tuple(row) for row in y.GetRows())
+    return VirtualTable(self.GetFields(), x_rows - y_rows, types=self.GetTypes())
 
-  def GetTable(self):
+  def GetTable(self, yield_field_names=True):
     """Generates formatted rows of an output table with fixed-width columns."""
     widths = [max([len('%s' % row[i]) for row in self._result]
                   + [len(self._fields[i])])
@@ -325,15 +360,22 @@ class VirtualTable(object):
         float: '%%%ds',
         decimal.Decimal: '%%%ds',
     }
-    if self._result:
+    if self._types:
+      types = self._types
+    elif self._result:
       types = [type(field) for field in self._result[0]]
     else:
       types = [str] * len(widths)
     fmt = ' '.join(fmts.get(types[i], '%%-%ds') % width
                    for i, width in enumerate(widths))
-    yield fmt % tuple(self._fields)
+    if yield_field_names:
+      yield (fmt % tuple(self._fields)).rstrip()
     for row in self._result:
-      yield fmt % tuple(row)
+      my_row = list(row)
+      for i, value in enumerate(my_row):
+        if isinstance(value, str):
+          my_row[i] = value.decode('ascii', 'replace')
+      yield (fmt % tuple(my_row)).rstrip()
 
   def __hash__(self):
     """Ordered hash of field names and unordered hash of rows."""
@@ -352,13 +394,54 @@ class VirtualTable(object):
 
   def AddField(self, name, value):
     """Add a field to the table and fill all cells with value."""
-    if name in self._fields:
-      raise ValueError('Field %s already exists' % name)
+    self.AddFields((name, value))
+
+  def AddFields(self, *args):
+    """Add multiple fields to the table and fill all cells with values.
+
+    Each arg for AddFields is a tuple of (name, value) pairs, where name is the
+    field name and value is the value to populate the cells with. Fields will be
+    added in the order they are passed in as args.
+
+    Raises:
+      ValueError: If one of the field names already exists.
+    """
+    names, values = zip(*args)
+    existing_fields = [n for n in names if n in self._fields]
+    if existing_fields:
+      error = ('Field %s already exists' if len(existing_fields) == 1
+               else 'Fields %s already exist')
+      raise ValueError(error % ', '.join(existing_fields))
     if isinstance(self._fields, tuple):
       self._fields = list(self._fields)
-    self._fields.append(name)
+    self._fields.extend(names)
     for row in self._result:
-      row.append(value)
+      row.extend(values)
+
+  def RemoveField(self, name):
+    """Remove a field from the table and delete all of that field's cells."""
+    self.RemoveFields(name)
+
+  def RemoveFields(self, *args):
+    """Remove multiple fields from the table and delete the associated cells.
+
+    Each arg for RemoveFields is a list of field names to remove. All field
+    names must exist or an error is raised.
+
+    Raises:
+      ValueError: If one of the field names does not exist.
+    """
+    invalid_fields = set(args) - set(self._fields)
+    if invalid_fields:
+      error = ('Field %s does not exist' if len(invalid_fields) == 1
+               else 'Fields %s do not exist')
+      raise ValueError(error % ', '.join(invalid_fields))
+    # Pop result list items in reverse order so the indexes stay correct.
+    idxs = [self._fields.index(arg) for arg in reversed(args)]
+    self._fields = [field for field in self._fields if field not in args]
+    for row in self._result:
+      for i in idxs:
+        row.pop(i)
 
   def GetFields(self):
     """Get the list of fields from this result.
@@ -376,6 +459,10 @@ class VirtualTable(object):
     """
     return self._result
 
+  def GetTypes(self):
+    """Get the list of Python types for fields."""
+    return self._types
+
   def GetRowsAffected(self):
     """Get the number of rows affected by the query.
 
@@ -385,6 +472,28 @@ class VirtualTable(object):
       If the query produced an error or warning, returns None.
     """
     return self._rowcount
+
+  def GetDeleteSQLList(self, table_name, fields=None):
+    """Turn this table into SQL that would be required to delete all rows.
+
+    Args:
+      table_name: The name to delete data from
+      fields: A list of fields in a unique key. If not provided, all fields will
+        be referenced in the where clauses.
+
+    Yields:
+      A list of SQL commands to be executed.
+    """
+    if not self:
+      yield '-- No rows to delete from %s' % table_name
+      return
+
+    fields = fields or self.GetFields()
+
+    for row in self:
+      where = ' AND '.join('%s=%s' % (field, _BaseConnection.Escape(row[field]))
+                           for field in fields)
+      yield 'DELETE FROM %s WHERE %s;' % (table_name, where)
 
   def GetInsertSQLList(self, table_name, max_size=0, extended_insert=True):
     """Turn this table into SQL that would be required to recreate it.
@@ -398,9 +507,9 @@ class VirtualTable(object):
     Yields:
       A list of SQL commands to be executed.
     """
-    if not self._result:
-      yield '-- Table %s is empty' % table_name
-      raise StopIteration
+    if not self:
+      yield '-- No rows to insert into %s' % table_name
+      return
 
     header = 'INSERT INTO %s (%s) VALUES ' % (
         table_name, ','.join(self._fields))
@@ -410,10 +519,7 @@ class VirtualTable(object):
       # Quote field contents and assemble
       quoted_values = []
       for value in row:
-        if isinstance(value, tuple) and value[0] == 'literal':
-          quoted_values.append(value[1])
-        else:
-          quoted_values.append(_BaseConnection.Escape(value))
+        quoted_values.append(_BaseConnection.Escape(value))
       values = '(%s)' % ','.join(quoted_values)
 
       if ((len(statement_parts) > 1 and not extended_insert)
@@ -481,7 +587,10 @@ class Operation(object):
     self._event.set()
 
   def Wait(self):
-    self._event.wait()
+    while not self._event.is_set():
+      # This is a workaround against the fact that wait eats
+      # KeyboardInterrupt exceptions if it has no timeout.
+      self._event.wait(sys.maxint)
     return self._result
 
   def TryWait(self):
@@ -497,8 +606,11 @@ class Operation(object):
 class _BaseConnection(object):
   """Common methods for connection objects."""
 
+  _SAFE_TYPES = frozenset((int, long, float, decimal.Decimal))
+
   def __init__(self, **kwargs):
     self._closed = True
+    self._pool = None
     # We strip the last 2 frames (one for BaseConnection and one for the
     # implementation class constructor).
     self._creation = [x.rstrip() for x in traceback.format_stack()[:-2]]
@@ -517,13 +629,21 @@ class _BaseConnection(object):
     self.Close()
     CONNECTIONS.remove(self._weakref)
 
+  def SetConnectionPool(self, pool):
+    """Register a pool to release to."""
+    self._pool = pool
+
   def __enter__(self):
     """'with' keyword begins."""
     return self
 
   def __exit__(self, type, value, traceback):
     """'with' keyword ends."""
-    self.Close()
+    if self._pool:
+      self._pool.Release(self)
+      # pool will close if necessary
+    else:
+      self.Close()
 
   def __str__(self):
     return '\n'.join([
@@ -537,17 +657,24 @@ class _BaseConnection(object):
         '=' * 80,
     ])
 
-  @staticmethod
-  def Escape(value):
+  @classmethod
+  def Escape(cls, value):
     """Escape MySQL characters in a value and wrap in quotes."""
-    return "'%s'" % ('%s' % value).replace("'", "''").replace('\\', '\\\\')
+    if value is None:
+      return 'NULL'
+    if isinstance(value, tuple) and value[0] == 'literal':
+      return value[1]
+    elif type(value) in cls._SAFE_TYPES:
+      return "%s" % value
+    else:
+      return "'%s'" % ('%s' % value).replace("'", "''").replace('\\', '\\\\')
 
   def Submit(self, query):
     """Submit a query for execution, return an opaque operation handle."""
     raise NotImplementedError
 
   def Wait(self, op):
-    """Return a dictionary as described in MultiExecute()."""
+    """Return a dictionary of shard -> ResultIterator."""
     raise NotImplementedError
 
   def TryWait(self, op):
@@ -598,11 +725,17 @@ class _BaseConnection(object):
       QueryErrors or QueryWarnings instance and host is a string representation
       of the individual host.
     """
-    if params:
+    if params is not None:
       query %= dict(zip(params.keys(), map(self.Escape, params.values())))
     self._closed = False
     op = self.Submit(query)
-    return self.Wait(op)
+    result = self.Wait(op)
+    for shard in result.iterkeys():
+      if result[shard]:
+        result_list = list(result[shard])
+        assert len(result_list) == 1, 'Multiple results'
+        result[shard] = result_list[0]
+    return result
 
   def ExecuteMerged(self, query, params=None):
     """Execute a query on all targets in parallel, return all results merged.
@@ -614,7 +747,7 @@ class _BaseConnection(object):
 
     Returns:
       A merged VirtualTable with consolidated results from all hosts, plus a
-      'host' column indicating where results originated from.
+      'shard' column indicating where results originated from.
 
     Raises:
       InconsistentSchema: When different targets return different schema.
@@ -624,15 +757,15 @@ class _BaseConnection(object):
     results = self.MultiExecute(query, params)
 
     merged = None
-    for host, result in results.iteritems():
+    for shard, result in results.iteritems():
       if isinstance(result, QueryErrors):
         raise QueryErrorsException(result)
       if isinstance(result, QueryWarnings):
         raise QueryWarningsException(result)
-      if not result and not merged:
+      if result is None and merged is None:
         # Might be the result of a query that returns no data
         continue
-      result.AddField('host', host)
+      result.AddField('shard', shard)
       if merged:
         # Verify that the field list from this host is the same as all that came
         # before.
@@ -641,14 +774,17 @@ class _BaseConnection(object):
               '%s vs. %s' % (result.GetFields(), merged.GetFields()))
       else:
         # First time through the loop, create a new result table.
-        merged = VirtualTable(result.GetFields(), [])
+        merged = VirtualTable(result.GetFields(), [], types=result.GetTypes())
       merged.Merge(result)
 
     return merged
 
+  def ClearCache(self):
+    self._cache.clear()
+
   def CachedExecute(self, query, params=None):
     """Execute() with a caching layer to execute each query only once."""
-    if params:
+    if params is not None:
       # We have to merge params before we check the cache.
       query %= dict(zip(params.keys(), map(self.Escape, params.values())))
     if query not in self._cache:
@@ -668,23 +804,80 @@ class _BaseConnection(object):
     """Combination of CachedExecute() and ExecuteOrDie()."""
     return self.ExecuteOrDie(query, params, execute=self.CachedExecute)
 
+  def ExecuteWithRetry(self, query, params=None, execute=None, max_attempts=5,
+                       start_delay=1, backoff_multiplier=2):
+    """Execute a query and retry on fatal errors."""
+    execute = execute or self.ExecuteOrDie
+    for attempt in xrange(max_attempts):
+      try:
+        return execute(query, params)
+      except QueryErrorsException as e:
+        logging.exception('Retryable error')
+      time.sleep(start_delay * (backoff_multiplier ** attempt))
+    raise RetriesExceeded
+
   def Close(self):
     """Close database connections to all targets.
 
     This MUST be called before the handle is implicitly destroyed, or we log an
     error (to encourage closing ASAP after use completion).
     """
-    self.Execute('exit')
+    self.Submit('exit')
+    self.ClearCache()
     self._closed = True
 
+  def Transaction(self, *args, **kwargs):
+    """Factory for a Transaction object."""
+    return Transaction(self, *args, **kwargs)
 
-class QueryConsumer(threading.Thread):
-  """Consume SQL queries from a queue and return results."""
+  def Lock(self, *args, **kwargs):
+    """Factory for a Lock object."""
+    return Lock(self, *args, **kwargs)
 
-  _ERR_QUERY_CANCELED = QueryErrors(('Code', 'Message'),
-                                    ((2, 'Query canceled'),))
-  _ERR_UNKNOWN = QueryErrors(('Code', 'Message'),
-                             ((3, 'Unknown problem'),))
+
+class RowIterator(object):
+  """Pythonic iterator over the rows of a single MySQL result set."""
+
+  def __init__(self, result):
+    self._result = result
+    self._queue = Queue.Queue(maxsize=100)
+
+  def Delete(self):
+    """Consume (and discard) all rows to free up the MySQL connection."""
+    if not self._queue:
+      return
+    for row in self:
+      pass
+
+  def __del__(self):
+    self.Delete()
+
+  def __iter__(self):
+    return self
+
+  def PushRows(self):
+    """Run in the MySQL thread to push rows onto the queue."""
+    while True:
+      row = self._result.fetch_row()
+      if not row:
+        self._queue.put(None)
+        break
+      self._queue.put(row)
+
+  def next(self):
+    if not self._queue:
+      logging.error('Iterating over a consumed RowIterator')
+      raise StopIteration
+    row = self._queue.get()
+    if row is None:
+      self._queue = None
+      raise StopIteration
+    return row[0]
+
+
+class ResultIterator(object):
+  """Pythonic iterator over MySQL result sets."""
+
   _TYPES = {
       0: float,
       1: int,
@@ -702,6 +895,105 @@ class QueryConsumer(threading.Thread):
       253: str,
       254: str,
   }
+
+  def __init__(self, dbh, charset, stream_results, fatal_errors):
+    """Constructor.
+
+    Args:
+      dbh: MySQLdb database connection handle.
+      charset: Name of character set to interpret results in.
+      stream_results: Boolean; if True, fetch and process row-at-a-time,
+        otherwise buffer full result.
+      fatal_errors: List of integer error codes to be treated as fatal to the
+        connection.
+    """
+    self._dbh = dbh
+    self._charset = charset
+    self._stream_results = stream_results
+    self._fatal_errors = fatal_errors
+    self._queue = Queue.Queue(maxsize=100)
+
+  def Delete(self):
+    """Consume (and discard) all results to free up MySQL connection."""
+    if not self._queue:
+      return
+    for result in self:
+      pass
+
+  def __del__(self):
+    self.Delete()
+
+  def __iter__(self):
+    return self
+
+  def PushResults(self):
+    """Run in the MySQL thread to push results onto the queue.
+
+    Returns:
+      True on pushing all results to the queue. False on failure that requires
+      the connection to be closed.
+    """
+    ret = True
+    while True:
+      try:
+        if self._stream_results:
+          result = self._dbh.use_result()
+        else:
+          result = self._dbh.store_result()
+        rowcount = self._dbh.affected_rows()
+        if self._dbh.warning_count() > 0:
+          msg = 'Query produced warnings; run SHOW WARNINGS for details'
+          self._queue.put(QueryWarnings(('Code', 'Message'), ((5, msg),)))
+          continue
+        if not result:
+          # Query returned no rows, but might have affected some
+          self._queue.put(VirtualTable([], [], rowcount, types=[]))
+          continue
+        # Query returned some rows
+        fields = [i[0].decode(self._charset) for i in result.describe()]
+        types = [self._TYPES.get(i[1], None) for i in result.describe()]
+        rowiter = RowIterator(result)
+        vt = VirtualTable(
+            fields, rowiter, rowcount, types=types, populate=False)
+        self._queue.put(vt)
+        rowiter.PushRows()
+      except MySQLdb.Error, e:
+        code, message = e.args
+        logging.exception('Query returned error.')
+        self._queue.put(QueryErrors(('Code', 'Message'), ((code, message),)))
+        if code in self._fatal_errors:
+          ret = False
+      except Exception, e:
+        logging.exception('Query returned unknown error.')
+        self._queue.put(QueryErrors(('Code', 'Message'), ((4, str(e)),)))
+      finally:
+        # next_result() has a C-style API; 0 on success, -1 on failure.
+        if self._dbh.next_result():
+          self._queue.put(None)
+          break
+    return ret
+
+  def next(self):
+    if not self._queue:
+      logging.error('Iterating over a consumed ResultIterator')
+      raise StopIteration
+    value = self._queue.get()
+    if value is None:
+      self._queue = None
+      raise StopIteration
+    # TODO(flamingcow): Remove when we make VirtualTable smart about streaming.
+    if isinstance(value, VirtualTable):
+      value.Populate()
+    return value
+
+
+class QueryConsumer(threading.Thread):
+  """Consume SQL queries from a queue and return results."""
+
+  _ERR_QUERY_CANCELED = QueryErrors(('Code', 'Message'),
+                                    ((2, 'Query canceled'),))
+  _ERR_UNKNOWN = QueryErrors(('Code', 'Message'),
+                             ((3, 'Unknown problem'),))
 
   _DBTYPE_SETUP = {
       'mysql': None,
@@ -722,6 +1014,7 @@ class QueryConsumer(threading.Thread):
     self.in_progress = None
     self.in_progress_lock = threading.Lock()
     self._resolver = None
+    self._last_response = None
 
     if 'host' in self._dbargs:
       self.setName(self._dbargs['host'])
@@ -734,92 +1027,77 @@ class QueryConsumer(threading.Thread):
       query = op.GetArgs()[0]
 
       if query == 'exit' or query == 'exit;':
-        self._Close()
-        op.SetDone(None)
+        self.Close()
+        op.SetDone([None])
         continue
 
       if query == 'destroy' or query == 'destroy;':
-        self._Close()
-        op.SetDone(None)
+        self.Close()
+        op.SetDone([None])
         return
 
       result = self._ERR_UNKNOWN
       try:
-        self.in_progress_lock.acquire()
-        self.in_progress = op
-        self.in_progress_lock.release()
+        with self.in_progress_lock:
+          self.in_progress = op
         if op.IsCanceled():
           logging.debug('Not executing canceled query %s', query)
-          result = self._ERR_QUERY_CANCELED
+          result = [self._ERR_QUERY_CANCELED]
         else:
           result = self._Execute(query)
-          if not result and op.IsCanceled():
-            # hack around MySQLdb swallowing the cancel error
-            result = self._ERR_QUERY_CANCELED
         self.in_progress = None
       finally:
         op.SetDone(result)
+        # TODO(flamingcow): Refactor run/Execute so we don't have to detect
+        # object type here.
+        if isinstance(result, ResultIterator):
+          if not result.PushResults():
+            self.Close()
 
   def _Execute(self, query):
     if not self._dbh:
       args = self._dbargs.copy()
-      # Custom dbtypes get to do their own resolution
-      if self._resolver and args['dbtype'] == 'mysql':
+      if self._resolver:
         try:
           (args['host'], port) = random.choice(self._resolver())
         except ResolutionError, e:
           logging.exception('Resolution failure.')
-          return QueryErrors(('Code', 'Message'), ((1, str(e)),))
+          return [QueryErrors(('Code', 'Message'), ((1, str(e)),))]
         if not args.get('port'):
           args['port'] = port
       try:
         self._Connect(args)
       except MySQLdb.OperationalError, e:
-        logging.exception('Connection returned error.')
-        self._Close()
-        return QueryErrors(('Code', 'Message'), ((e[0], e[1]),))
+        logging.exception('Connection returned error.  DB:%s:%s',
+                          args['host'], args.get('port'))
+        self.Close()
+        return [QueryErrors(('Code', 'Message'), ((e[0], e[1]),))]
       except Exception, e:
-        logging.exception('Connection returned unknown error.')
-        self._Close()
-        return QueryErrors(('Code', 'Message'), ((3, str(e)),))
+        logging.exception('Connection returned unknown error. DB:%s:%s',
+                          args['host'], args.get('port'))
+        self.Close()
+        return [QueryErrors(('Code', 'Message'), ((3, str(e)),))]
+    if self._last_response:
+      self._last_response.Delete()
     try:
       if isinstance(query, unicode):
         query = query.encode(self._charset)
       logging.debug('Executing %s', query)
       self._dbh.query(query)
-      if self._stream_results:
-        data = self._dbh.use_result()
-      else:
-        data = self._dbh.store_result()
-      rowcount = self._dbh.affected_rows()
-      if self._dbh.warning_count() > 0:
-        warnings = self._dbh.show_warnings()
-        return QueryWarnings(('Level', 'Code', 'Message'), warnings)
-      if not data:
-        # Query returned no rows, but might have affected some
-        return VirtualTable([], [], rowcount)
-      # Query returned some rows
-      fields = [i[0].decode(self._charset) for i in data.describe()]
-      if self._stream_results:
-        def StreamResults():
-          while True:
-            row = data.fetch_row()
-            if not row:
-              raise StopIteration
-            yield row[0]
-        result = StreamResults()
-      else:
-        result = data.fetch_row(0)
     except MySQLdb.Error, e:
       code, message = e.args
       logging.exception('Query returned error.')
       if code in self._fatal_errors:
-        self._Close()
-      return QueryErrors(('Code', 'Message'), ((code, message),))
+        self.Close()
+      return [QueryErrors(('Code', 'Message'), ((code, message),))]
     except Exception, e:
       logging.exception('Query returned unknown error.')
-      return QueryErrors(('Code', 'Message'), ((4, str(e)),))
-    return VirtualTable(fields, result, rowcount)
+      return [QueryErrors(('Code', 'Message'), ((4, str(e)),))]
+    self._last_response = ResultIterator(self._dbh,
+                                         self._charset,
+                                         self._stream_results,
+                                         self._fatal_errors)
+    return self._last_response
 
   def _Connect(self, args):
     log_args = args.copy()
@@ -841,8 +1119,9 @@ class QueryConsumer(threading.Thread):
     for init_query in self._execute_on_connect:
       logging.debug('Executing on-connect query: %s', init_query)
       self._dbh.query(init_query)
+      self._dbh.store_result()
 
-  def _Close(self):
+  def Close(self):
     if self._dbh:
       logging.debug('Closing connection to %s', self._dbargs['host'])
       self._dbh.close()
@@ -877,7 +1156,7 @@ class Connection(_BaseConnection):
     return op
 
   def Wait(self, op):
-    return {self._consumer.getName(): op.Wait()}
+    return {0: op.Wait()}
 
   def TryWait(self, op):
     return op.TryWait()
@@ -911,8 +1190,9 @@ class Connection(_BaseConnection):
 class MultiConnection(_BaseConnection):
   """Wrap a set of real connections; execute in parallel."""
 
-  _SHARD_RE = re.compile('^\s*ON\s+SHARD\s+(?P<shard>[\d,]+)\s+(?P<query>.*)$',
-                         re.IGNORECASE | re.DOTALL | re.MULTILINE)
+  SHARD_RE = re.compile(
+      '^(?P<prefix>\s*ON\s+SHARD\s+(?P<shard>[\d,]+)\s+)(?P<query>.*)$',
+      re.IGNORECASE | re.DOTALL | re.MULTILINE)
 
   def __init__(self, **kwargs):
     _BaseConnection.__init__(self, **kwargs)
@@ -939,10 +1219,13 @@ class MultiConnection(_BaseConnection):
     Returns:
       An opaque handle to the running query, to be passed to Wait() or Cancel().
     """
-    shard_match = self._SHARD_RE.search(query)
+    shard_match = self.SHARD_RE.search(query)
     if shard_match:
       shards = [int(shard) for shard in shard_match.group('shard').split(',')]
       query = shard_match.group('query')
+      if not set(shards).issubset(set(self._connections)):
+        raise InvalidShard('%s is not a subset of %s'
+                           % (shards, self._connections.keys()))
     else:
       shards = self._connections.keys()
 
@@ -951,8 +1234,8 @@ class MultiConnection(_BaseConnection):
       spec, connection = value
       if shard in shards:
         if connection is None:
-          connection = value[1] = spec.Connect()
-        ops.append((spec['host'], connection, connection.Submit(query)))
+          connection = value[1] = spec.Connect(connection_class=Connection)
+        ops.append((shard, connection, connection.Submit(query)))
     return ops
 
   def Wait(self, ops):
@@ -1035,9 +1318,11 @@ class ConnectionPool(_BaseConnection):
         logging.info('ConnectionPool waited %f seconds to get a connection.',
                      time.time() - start_time)
       try:
-        return self._open_spares.pop()
+        conn = self._open_spares.pop()
       except IndexError:
-        return self._closed_spares.pop()
+        conn = self._closed_spares.pop()
+      conn.SetConnectionPool(self)
+      return conn
 
   def Release(self, conn):
     """Return a connection to the pool.
@@ -1047,6 +1332,7 @@ class ConnectionPool(_BaseConnection):
     Args:
       conn: The connection instance to return.
     """
+    conn.SetConnectionPool(None)
     with self._cv:
       if len(self._open_spares) < self._max_open_unused:
         self._open_spares.append(conn)
@@ -1083,15 +1369,14 @@ _RANGE_RE = re.compile(r'{(?P<start>\d+)\.\.(?P<end>\d+)}')
 
 def _GetExpander(name, dbargs):
   if '#' in name:
-    return _HashExpander(name, dbargs.copy())
-
-  if ',' in name:
-    return _ListExpander(name)
-
-  if _RANGE_RE.search(name):
-    return _RangeExpander(name)
-
-  return _NoOpExpander(name)
+    expander_class = _HashExpander
+  elif ',' in name:
+    expander_class = _ListExpander
+  elif _RANGE_RE.search(name):
+    expander_class = _RangeExpander
+  else:
+    expander_class = _NoOpExpander
+  return expander_class(name, dbargs)
 
 
 def GetResolver(dbspec):
@@ -1127,19 +1412,36 @@ class Cache(object):
     return self._last_lookup_value
 
 
+def _ExpandDb(db_str, index):
+  if not db_str:
+    return db_str
+  if ',' in db_str:
+    return db_str.split(',')[index]
+  elif '#' in db_str:
+    return db_str.replace('#', str(index))
+  else:
+    return db_str
+
+
 class _HashExpander(Cache):
   """Expand # in a name."""
 
   def _Lookup(self):
     # As long as we remove at least one # from the name, this can't be
     # infinitely recursive.
-    self._args['host'] = self._name.replace('#', '0')
-    self._args['db'] = self._args['db'].replace('#', '0')
-    conn = MultiConnection(**self._args)
+    shard_0_dbargs = self._args.copy()
+    shard_0_dbargs.update({
+        'host': self._args['host'].replace('#', '0'),
+        'db': self._args['db'].replace('#', '0')
+    })
+
+    conn = MultiConnection(**shard_0_dbargs)
     result = conn.ExecuteOrDie('SELECT NumShards FROM ConfigurationGlobals')
-    expansion = {}
+    expansion = []
     for x in xrange(int(result[0]['NumShards'])):
-      expansion[x] = self._name.replace('#', str(x))
+      shard_host = self._name.replace('#', str(x))
+      db = _ExpandDb(self._args['db'], x)
+      expansion.append((x, shard_host, db))
     conn.Close()
     return expansion
 
@@ -1149,7 +1451,8 @@ class _ListExpander(Cache):
 
   def _Lookup(self):
     hosts = self._name.split(',')
-    return dict(enumerate(hosts))
+    return [(i, host, _ExpandDb(self._args['db'], i))
+            for i, host in enumerate(hosts)]
 
 
 class _RangeExpander(Cache):
@@ -1157,10 +1460,12 @@ class _RangeExpander(Cache):
 
   def _Lookup(self):
     range_result = _RANGE_RE.search(self._name)
-    expansion = {}
+    expansion = []
     range_params = range_result.groupdict()
     for x in xrange(int(range_params['start']), int(range_params['end']) + 1):
-      expansion[x] = self._name.replace(range_result.group(0), str(x))
+      host = self._name.replace(range_result.group(0), str(x))
+      db = _ExpandDb(self._args['db'], x)
+      expansion.append((x, host, db))
     return expansion
 
 
@@ -1168,7 +1473,7 @@ class _NoOpExpander(Cache):
   """Expand a name to itself, as shard zero."""
 
   def _Lookup(self):
-    return {0: self._name}
+    return [(0, self._name, self._args['db'])]
 
 
 _DEFAULT_PORT = 3306
