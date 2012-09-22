@@ -292,41 +292,55 @@ class VirtualTable(object):
 
   _contents = 'Rows'
 
-  def __init__(self, fields, result, rowcount=None, types=None, populate=True):
+  def __init__(self, fields, result, rowcount=None, types=None):
     """Constructor.
 
     Args:
       fields: A list of field names
-      result: A list of lists of rows with cell data
+      result: An iterator of rows with cell data
       rowcount: Number of rows affected by the query. Ignored if result
                 is non-empty.
       types: A list of python type classes for fields.
-      populate: Whether to pull all rows in from result now, or wait until
-                Populate() is called. Dirty hack while we implement real
-                streaming support here.
     """
     self._fields = fields
-    self._result = []
+    self._result = iter(result)
     self._types = types or []
     self._rowcount = rowcount
-    self._rows = result
-    if populate:
-      self.Populate()
+    self._rows = []
+    self._started_iteration = False
+    self._populated = False
 
-  # TODO(flamingcow): This is ugly; we should only pull rows when we need them.
   def Populate(self):
-    """Read in rows and store them internally."""
-    for row in self._rows:
+    """Consume all input rows."""
+    if self._populated:
+      return
+    assert not self._started_iteration
+    for row in self._result:
       self.Append(row)
+#    self._result = iter(self._rows)
+    self._populated = True
 
   def __getitem__(self, i):
     if isinstance(i, slice):
-      return VirtualTable(self.GetFields(), self._result[i],
+      return VirtualTable(self.GetFields(), self.GetRows()[i],
                           types=self.GetTypes())
-    return dict(zip(self._fields, self._result[i]))
+    return dict(zip(self._fields, self.GetRows()[i]))
+
+  def __iter__(self):
+    if self._populated:
+      # Reset
+      self._result = iter(self._rows)
+    return self
+
+  def next(self):
+    self._started_iteration = True
+    row = self._result.next()
+    if len(row) != len(self._fields):
+      raise TypeError('Incorrect column count')
+    return dict(zip(self._fields, row))
 
   def __len__(self):
-    return len(self._result)
+    return len(self.GetRows())
 
   def __eq__(self, y):
     return (self.__class__ == y.__class__ and
@@ -338,20 +352,22 @@ class VirtualTable(object):
 
   def __str__(self):
     rows = []
-    for row in self._result:
+    for row in self.GetRows():
       fields = ['%s: %s' % x for x in zip(self._fields, row)]
       rows.append('\n'.join(fields))
     return '%s returned: %d\n*****\n%s\n' % (
-        self._contents, len(self._result), '\n*****\n'.join(rows))
+        self._contents, len(self), '\n*****\n'.join(rows))
 
   def __sub__(self, y):
     x_rows = set(tuple(row) for row in self.GetRows())
     y_rows = set(tuple(row) for row in y.GetRows())
-    return VirtualTable(self.GetFields(), x_rows - y_rows, types=self.GetTypes())
+    return VirtualTable(self.GetFields(),
+                        x_rows - y_rows,
+                        types=self.GetTypes())
 
   def GetTable(self, yield_field_names=True):
     """Generates formatted rows of an output table with fixed-width columns."""
-    widths = [max([len('%s' % row[i]) for row in self._result]
+    widths = [max([len('%s' % row[i]) for row in self.GetRows()]
                   + [len(self._fields[i])])
               for i in xrange(len(self._fields))]
     fmts = {
@@ -362,15 +378,15 @@ class VirtualTable(object):
     }
     if self._types:
       types = self._types
-    elif self._result:
-      types = [type(field) for field in self._result[0]]
+    elif self.GetRows():
+      types = [type(field) for field in self.GetRows()[0]]
     else:
       types = [str] * len(widths)
     fmt = ' '.join(fmts.get(types[i], '%%-%ds') % width
                    for i, width in enumerate(widths))
     if yield_field_names:
       yield (fmt % tuple(self._fields)).rstrip()
-    for row in self._result:
+    for row in self.GetRows():
       my_row = list(row)
       for i, value in enumerate(my_row):
         if isinstance(value, str):
@@ -380,7 +396,7 @@ class VirtualTable(object):
   def __hash__(self):
     """Ordered hash of field names and unordered hash of rows."""
     ret = hash(tuple(self._fields))
-    for row in self._result:
+    for row in self.GetRows():
       ret ^= hash(tuple(row))
     return ret
 
@@ -390,7 +406,7 @@ class VirtualTable(object):
       raise TypeError('Incorrect column count')
     if isinstance(row, tuple):
       row = list(row)
-    self._result.append(row)
+    self._rows.append(row)
 
   def AddField(self, name, value):
     """Add a field to the table and fill all cells with value."""
@@ -412,10 +428,12 @@ class VirtualTable(object):
       error = ('Field %s already exists' if len(existing_fields) == 1
                else 'Fields %s already exist')
       raise ValueError(error % ', '.join(existing_fields))
+    # Must populate before adding the field, so the field list matches
+    self.Populate()
     if isinstance(self._fields, tuple):
       self._fields = list(self._fields)
     self._fields.extend(names)
-    for row in self._result:
+    for row in self.GetRows():
       row.extend(values)
 
   def RemoveField(self, name):
@@ -436,10 +454,12 @@ class VirtualTable(object):
       error = ('Field %s does not exist' if len(invalid_fields) == 1
                else 'Fields %s do not exist')
       raise ValueError(error % ', '.join(invalid_fields))
+    # Must populate before removing the field, so the field list matches
+    self.Populate()
     # Pop result list items in reverse order so the indexes stay correct.
     idxs = [self._fields.index(arg) for arg in reversed(args)]
     self._fields = [field for field in self._fields if field not in args]
-    for row in self._result:
+    for row in self.GetRows():
       for i in idxs:
         row.pop(i)
 
@@ -457,7 +477,8 @@ class VirtualTable(object):
     Returns:
       A list of lists containing cell data.
     """
-    return self._result
+    self.Populate()
+    return self._rows
 
   def GetTypes(self):
     """Get the list of Python types for fields."""
@@ -511,11 +532,14 @@ class VirtualTable(object):
       yield '-- No rows to insert into %s' % table_name
       return
 
+    # TODO(flamingcow): Make this streaming.
+    self.Populate()
+
     header = 'INSERT INTO %s (%s) VALUES ' % (
         table_name, ','.join(self._fields))
     statement_parts = [header]
     statement_len = 0
-    for row in self._result:
+    for row in self._rows:
       # Quote field contents and assemble
       quoted_values = []
       for value in row:
@@ -549,7 +573,9 @@ class VirtualTable(object):
     if self.GetFields() != table.GetFields():
       raise TypeError("Field lists don't match (%s vs. %s)" %
                       (self.GetFields(), table.GetFields()))
-    self._result.extend(table.GetRows())
+    self.Populate()
+    # TODO(flamingcow): Make this streaming.
+    self._rows.extend(table.GetRows())
     # If this table has no rowcount, adopt the other table's value
     other_rowcount = table.GetRowsAffected()
     if self._rowcount is None or other_rowcount is None:
@@ -731,10 +757,11 @@ class _BaseConnection(object):
     op = self.Submit(query)
     result = self.Wait(op)
     for shard in result.iterkeys():
-      if result[shard]:
-        result_list = list(result[shard])
-        assert len(result_list) == 1, 'Multiple results'
-        result[shard] = result_list[0]
+      # TODO(flamingcow): Do something better with multiple results here.
+      if isinstance(result[shard], ResultIterator):
+        result[shard] = result[shard].next()
+      elif result[shard]:
+        result[shard] = result[shard][0]
     return result
 
   def ExecuteMerged(self, query, params=None):
@@ -788,7 +815,9 @@ class _BaseConnection(object):
       # We have to merge params before we check the cache.
       query %= dict(zip(params.keys(), map(self.Escape, params.values())))
     if query not in self._cache:
-      self._cache[query] = self.Execute(query)
+      result = self.Execute(query)
+      result.Populate()
+      self._cache[query] = result
     return self._cache[query]
 
   def ExecuteOrDie(self, query, params=None, execute=None):
@@ -953,8 +982,7 @@ class ResultIterator(object):
         fields = [i[0].decode(self._charset) for i in result.describe()]
         types = [self._TYPES.get(i[1], None) for i in result.describe()]
         rowiter = RowIterator(result)
-        vt = VirtualTable(
-            fields, rowiter, rowcount, types=types, populate=False)
+        vt = VirtualTable(fields, rowiter, rowcount, types=types)
         self._queue.put(vt)
         rowiter.PushRows()
       except MySQLdb.Error, e:
@@ -981,9 +1009,6 @@ class ResultIterator(object):
     if value is None:
       self._queue = None
       raise StopIteration
-    # TODO(flamingcow): Remove when we make VirtualTable smart about streaming.
-    if isinstance(value, VirtualTable):
-      value.Populate()
     return value
 
 
