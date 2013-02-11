@@ -1,6 +1,6 @@
-#!/usr/bin/python2.6
+#!/usr/bin/python2
 #
-# Copyright 2006 Google Inc.
+# Copyright 2006 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -42,39 +42,40 @@ import hashlib
 import logging
 import re
 
+import gflags
+
 from pylib import app
 from pylib import db
-from pylib import flags
 from pylib import trickle_lib
 
 
-FLAGS = flags.FLAGS
+FLAGS = gflags.FLAGS
 
-flags.DEFINE_string("state_database", "admin",
-                    "database name to store state table in (i.e., 'scratch')")
-flags.DEFINE_string("state_table", "TrickleFileState",
-                    "table to store state in")
-flags.DEFINE_string("dbspec", "", "database to execute statements in")
-flags.DEFINE_string("input", "", "filename to process as input")
-flags.DEFINE_integer("cycle_time", 5,
-                     "seconds each batch of statements should take")
-flags.DEFINE_integer("utilization_percent", 10,
-                     "target time per cycle to be executing statements rows")
-flags.DEFINE_integer("artificial_batch_cap", None,
-                     "never run more than this many lines per batch")
-flags.DEFINE_boolean("init_state_table", False,
-                     "populate the state table with file checksums and exit")
-flags.DEFINE_boolean("allow_warnings", False,
-                     "continue after sql statements that give warnings")
-flags.DEFINE_string("session_init", None,
-                    "SQL commands to run to initialize the session, "
-                    "e.g. SET LOG_BIN=0")
+gflags.DEFINE_string('state_database', 'admin',
+                     'database name to store state table in (i.e., "scratch")')
+gflags.DEFINE_string('state_table', 'TrickleFileState',
+                     'table to store state in')
+gflags.DEFINE_string('dbspec', '', 'database to execute statements in')
+gflags.DEFINE_string('input', '', 'filename to process as input')
+gflags.DEFINE_integer('cycle_time', 5,
+                      'seconds each batch of statements should take')
+gflags.DEFINE_integer('utilization_percent', 10,
+                      'target time per cycle to be executing statements rows')
+gflags.DEFINE_integer('artificial_batch_cap', None,
+                      'never run more than this many lines per batch')
+gflags.DEFINE_boolean('init_state_table', False,
+                      'populate the state table with file checksums and exit')
+gflags.DEFINE_boolean('allow_warnings', False,
+                      'continue after sql statements that give warnings')
+gflags.DEFINE_string('session_init', None,
+                     'SQL commands to run to initialize the session, '
+                     'e.g. SET LOG_BIN=0')
 
 # regexes we use to help identify transaction blocks
 valid_sql_re = re.compile(
     r'(INSERT (IGNORE )?INTO|REPLACE INTO|UPDATE|DELETE)\s', re.IGNORECASE)
-begin_re = re.compile("^BEGIN;?\s*$", re.IGNORECASE)
-commit_re = re.compile("^COMMIT;?\s*$", re.IGNORECASE)
+begin_re = re.compile(r'^BEGIN;?\s*$', re.IGNORECASE)
+commit_re = re.compile(r'^COMMIT;?\s*$', re.IGNORECASE)
 
 
 def ValidSqlLine(line):
@@ -109,7 +110,7 @@ def _PrepareFile(filename):
 
   for line in fh:
     if not ValidSqlLine(line):
-      logging.fatal("File contains invalid sql: %s", line)
+      logging.fatal('File contains invalid sql: %s', line)
 
     filesize += len(line)
     checksummer.update(line)
@@ -122,7 +123,7 @@ def InitStateTable(dbh, state_db, state_table, fh, fsize, fchecksum):
 
   If a row already exists for the specified file name, that row is replaced.
   """
-  dbh.ExecuteOrDie("REPLACE INTO %s.%s VALUES ('%s', %d, '%s', 0, NULL)" %
+  dbh.ExecuteOrDie('REPLACE INTO %s.%s VALUES ("%s", %d, "%s", 0, NULL)' %
                    (state_db, state_table, fh.name, fsize, fchecksum))
 
 
@@ -167,24 +168,24 @@ class DbFileTrickler(trickle_lib.TrickledOperation):
     checksum.
     """
     rows = self._db.ExecuteOrDie(
-        "SELECT Checksum, Size, Offset FROM %s.%s WHERE Filename = '%s'" %
+        'SELECT Checksum, Size, Offset FROM %s.%s WHERE Filename = "%s"' %
         (self._state_database, self._state_table, self._filename))
 
     if not rows:
-      logging.info("Creating row in state table")
+      logging.info('Creating row in state table')
       with self._db.Transaction():
         self._db.ExecuteOrDie(
-            "INSERT INTO %s.%s VALUES ('%s', %d, '%s', 0, NULL)" %
+            'INSERT INTO %s.%s VALUES ("%s", %d, "%s", 0, NULL)' %
             (self._state_database, self._state_table, self._filename,
              self._size, self._checksum))
     else:
       if self._size != long(rows[0]['Size']):
-        logging.fatal("database filesize does not match actual file: %s vs %s",
+        logging.fatal('database filesize does not match actual file: %s vs %s',
                       self._size, rows[0]['Size'])
       if self._checksum != rows[0]['Checksum']:
-        logging.fatal("SHA-1 checksum mismatch on file vs database")
+        logging.fatal('SHA-1 checksum mismatch on file vs database')
       self._offset_bytes = rows[0]['Offset']
-      logging.info("Resuming at offset %d", self._offset_bytes)
+      logging.info('Resuming at offset %d', self._offset_bytes)
 
   def _SetupTrickle(self):
     """Determine the current file offset based on our state table.
@@ -192,7 +193,7 @@ class DbFileTrickler(trickle_lib.TrickledOperation):
     Called once before the first call to _PerformTrickle().
     """
     row = self._db.ExecuteOrDie(
-        "SELECT Offset FROM %s.%s WHERE Filename = '%s'" %
+        'SELECT Offset FROM %s.%s WHERE Filename = "%s"' %
         (self._state_database, self._state_table, self._filename))
     assert len(row) == 1 and len(row[0]) == 1
 
@@ -233,7 +234,7 @@ class DbFileTrickler(trickle_lib.TrickledOperation):
         break
 
       if not ValidSqlLine(line):
-        logging.fatal("Encountered invalid sql: %s", line)
+        logging.fatal('Encountered invalid sql: %s', line)
 
       if begin_re.match(line):
         transaction = []
@@ -241,18 +242,18 @@ class DbFileTrickler(trickle_lib.TrickledOperation):
           next_line = self._fh.readline()
 
           if not next_line:
-            logging.fatal("Input file terminated inside of BEGIN block")
+            logging.fatal('Input file terminated inside of BEGIN block')
           elif not ValidSqlLine(next_line):
-            logging.fatal("Encountered invalid sql: %s", next_line)
+            logging.fatal('Encountered invalid sql: %s', next_line)
           elif begin_re.match(next_line):
-            logging.fatal("Attempt to nest transactions")
+            logging.fatal('Attempt to nest transactions')
           elif commit_re.match(next_line):
             break
           else:
             transaction.append(next_line)
         batch.append(transaction)
       elif commit_re.match(line):
-        logging.fatal("Attempt to commit outside of transaction")
+        logging.fatal('Attempt to commit outside of transaction')
       else:
         batch.append([line])
 
@@ -268,12 +269,12 @@ class DbFileTrickler(trickle_lib.TrickledOperation):
               raise
 
       result = self._db.ExecuteOrDie(
-          "UPDATE %s.%s SET Offset = %d WHERE Filename = '%s' AND Offset = %d" %
+          'UPDATE %s.%s SET Offset = %d WHERE Filename = "%s" AND Offset = %d' %
           (self._state_database, self._state_table,
            self._offset_bytes, self._filename, starting_offset))
       if result.GetRowsAffected() != 1:
-        logging.fatal("Attempt to update database state but something "
-                      "already changed it")
+        logging.fatal('Attempt to update database state but something '
+                      'already changed it')
 
     return len(batch)
 
