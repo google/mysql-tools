@@ -1,6 +1,6 @@
-#!/usr/bin/python2.6
+#!/usr/bin/python2
 #
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,16 +14,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-__author__ = 'flamingcow@google.com (Ian Gulliver)'
+"""A schema linter, connects to a running mysql and checks for common errors."""
 
+__author__ = 'flamingcow@google.com (Ian Gulliver)'
 
 from pylib import app
 from pylib import db
-from pylib import flags
 
-FLAGS = flags.FLAGS
+import gflags
 
-flags.DEFINE_string('db', None, 'DB spec to scan')
+FLAGS = gflags.FLAGS
+
+gflags.DEFINE_string('db', None, 'DB spec to scan')
 
 
 def _ListStartsWith(superset, subset):
@@ -33,9 +35,9 @@ def _ListStartsWith(superset, subset):
 
 def FindNonTransactionalTables(dbh):
   tables = dbh.ExecuteOrDie(
-      "SELECT TABLE_SCHEMA, TABLE_NAME, ENGINE FROM INFORMATION_SCHEMA.TABLES"
-      " WHERE TABLE_SCHEMA NOT IN ('mysql', 'information_schema')"
-      " AND ENGINE IN ('MyISAM')")
+      'SELECT TABLE_SCHEMA, TABLE_NAME, ENGINE FROM INFORMATION_SCHEMA.TABLES'
+      ' WHERE TABLE_SCHEMA NOT IN ("mysql", "information_schema")'
+      ' AND ENGINE IN ("MyISAM")')
 
   for table in tables:
     print '`%s`.`%s`: Non-transactional engine %s' % (
@@ -71,7 +73,7 @@ def FindDuplicateIndexes(dbh):
     if 'PRIMARY' in indexes and len(indexes['PRIMARY']['columns']) == 1:
       # Single-column primary index. Validate type.
       column_info = dbh.ExecuteOrDie(
-          "SHOW COLUMNS FROM `%s`.`%s` LIKE %%(column)s" %
+          'SHOW COLUMNS FROM `%s`.`%s` LIKE %%(column)s' %
           (table['TABLE_SCHEMA'],
            table['TABLE_NAME']),
           {'column': indexes['PRIMARY']['columns'][0]})
@@ -86,7 +88,7 @@ def FindDuplicateIndexes(dbh):
             column_info[0]['Field'], column_info[0]['Type'])
 
 
-def main(argv):
+def main(unused_argv):
   assert FLAGS.db, 'Please pass --db'
 
   with db.Connect(FLAGS.db) as dbh:
