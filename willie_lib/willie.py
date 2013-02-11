@@ -1,6 +1,4 @@
-#!/usr/bin/python2.6
-#
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,13 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+"""A library for slowly deleting data from a table."""
+
 import csv
 import time
 
 try:
-  from pylib import range_lib
-except ImportError:
   from ..pylib import range_lib
+except (ImportError, ValueError):
+  from pylib import range_lib
 
 
 class CsvWriter(object):
@@ -45,17 +45,18 @@ class Willie(object):
 
   def __init__(self, dbh, database_name, table, condition, limit,
                utilization_percent, dry_run, writer_type, filename):
-    """
-      Args:
-        dbh: The database handle.
-        database_name: The Database Name.
-        table: The table to cleanup.
-        condition: The conditional to get results for.
-        limit: The biggest batch size to get.
-        utilization percent: The utilization percentage.
-        dry_run: Do this for real or not.
-        writer_type: Type of file to write out delete rows.
-        filename: Name of file to write out delete rows to.
+    """Constructor.
+
+    Args:
+      dbh: The database handle.
+      database_name: The Database Name.
+      table: The table to cleanup.
+      condition: The conditional to get results for.
+      limit: The biggest batch size to get.
+      utilization_percent: The utilization percentage.
+      dry_run: Do this for real or not.
+      writer_type: Type of file to write out delete rows.
+      filename: Name of file to write out delete rows to.
     """
     self._dbh = dbh
     self._database_name = database_name
@@ -71,33 +72,30 @@ class Willie(object):
     else:
       self._writer = None
 
-
   def GetRange(self):
     """Gets ranges to delete using range_lib based on a set condition."""
     rangeh = range_lib.PrimaryKeyRange(self._dbh, self._database_name,
                                        self._table)
     first_key = rangeh.GetFirstPrimaryKeyValue(self._condition)
     nth_key = rangeh.GetNthPrimaryKeyValue(self._limit, first_key)
-    rows = rangeh.RangePrimaryKeyValues(first_key, nth_key, '*')
     if self._writer:
+      rows = rangeh.RangePrimaryKeyValues(first_key, nth_key, '*')
       self._writer.WriteRows(rows)
     return rangeh.GenerateRangeWhere(first_key, nth_key)
-
 
   def PerformDelete(self, where_clause):
     """Deletes results from the database."""
     start_time = time.time()
-    delete_statement = ("DELETE FROM %s.%s WHERE %s"
+    delete_statement = ('DELETE FROM %s.%s WHERE %s'
                         % (self._database_name, self._table, where_clause))
-    print  "Delete statement: %s" % delete_statement
+    print 'Delete statement: %s' % delete_statement
     if not self._dry_run:
       self._dbh.ExecuteOrDie(delete_statement)
       end_time = time.time()
       delta_time = end_time - start_time
       delay_time = delta_time * (100.0 / self._utilization_percent) - delta_time
-      print  "Delay Time: %s" % delay_time
+      print 'Delay Time: %s' % delay_time
       time.sleep(delay_time)
-
 
   def Loop(self):
     while True:

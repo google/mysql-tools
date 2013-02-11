@@ -1,6 +1,6 @@
-#!/usr/bin/python2.6
+#!/usr/bin/python2
 #
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,31 +18,30 @@
 
 __author__ = 'darrinw@google.com (Darrin Ward)'
 
-import time
+import gflags
 
 from pylib import app
 from pylib import db
-from pylib import flags
 from willie_lib import willie
 
-FLAGS = flags.FLAGS
+FLAGS = gflags.FLAGS
 
-flags.DEFINE_boolean('dry_run', True,
-                     'Don\'t actually make any changes to the database.')
-flags.DEFINE_integer('limit', 100, 'Limit for select query')
-flags.DEFINE_integer('utilization_percent', 1, 'Utilization limit')
-flags.DEFINE_string('condition', None, 'Column condition'
-                    'to select rows to delete')
-flags.DEFINE_string('db', None, 'DBSpec to run on')
-flags.DEFINE_string('filename', None,
-                    'Name of CSV file for deleted rows.')
-flags.DEFINE_string('table', None, 'Table to operate on')
-flags.DEFINE_string('writer_type', None,
-                    'What Writer Type Should Be Used.'
-                    'CSV is currently the only accepted type.')
+gflags.DEFINE_boolean('dry_run', True,
+                      'Don\'t actually make any changes to the database.')
+gflags.DEFINE_integer('limit', 100, 'Limit for select query')
+gflags.DEFINE_integer('utilization_percent', 1, 'Utilization limit')
+gflags.DEFINE_string('condition', None, 'Column condition'
+                     'to select rows to delete')
+gflags.DEFINE_string('db', None, 'DBSpec to run on')
+gflags.DEFINE_string('filename', None,
+                     'Name of CSV file for deleted rows.')
+gflags.DEFINE_string('table', None, 'Table to operate on')
+gflags.DEFINE_string('writer_type', None,
+                     'What Writer Type Should Be Used.'
+                     'CSV is currently the only accepted type.')
 
 
-def main(args):
+def main(unused_args):
   assert FLAGS.db, 'Please pass --db'
   assert FLAGS.table, 'Please pass --table'
   assert FLAGS.condition, 'Please pass --condition'
