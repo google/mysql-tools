@@ -1,6 +1,6 @@
-#!/usr/bin/python2.6
+#!/usr/bin/python2
 #
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -66,36 +66,37 @@ __author__ = 'flamingcow@google.com (Ian Gulliver)'
 import inspect
 import sys
 
+import gflags
+
 from permissions_lib import define
 from permissions_lib import use
 from permissions_lib import utils
 from pylib import app
-from pylib import flags
 from pylib import db
 
-FLAGS = flags.FLAGS
+FLAGS = gflags.FLAGS
 
-flags.DEFINE_string('db', None, 'DB spec to read from/push to')
-flags.DEFINE_integer('push_duration', None,
-                     'Staggered push duration (seconds)')
-flags.DEFINE_multistring('file', None,
-                         'File containing permissions settings on which to '
-                         'operate. The file may contain one or more named sets '
-                         'of permissions.')
-flags.DEFINE_string('public_keyfile', None,
-                    'File to write/read public encryption key to/from')
-flags.DEFINE_string('private_keyfile', None,
-                    'File to write/read private encryption key to/from')
-flags.DEFINE_integer('key_bits', None,
-                     'Size (in bits) of new RSA key')
-flags.DEFINE_string('set', None,
-                    'Set name to publish to')
-flags.DEFINE_string('source_set', None,
-                    'Set name to publish from; defaults to target set')
-flags.DEFINE_boolean('incremental', True,
-                     'Write only differences to existing tables, instead of '
-                     'clearing tables and starting from scratch')
-flags.DEFINE_multistring('comment_name', [], 'Comment name to retrieve.')
+gflags.DEFINE_string('db', None, 'DB spec to read from/push to')
+gflags.DEFINE_integer('push_duration', None,
+                      'Staggered push duration (seconds)')
+gflags.DEFINE_multistring('file', None,
+                          'File containing permissions settings on which to '
+                          'operate. The file may contain one or more named sets '
+                          'of permissions.')
+gflags.DEFINE_string('public_keyfile', None,
+                     'File to write/read public encryption key to/from')
+gflags.DEFINE_string('private_keyfile', None,
+                     'File to write/read private encryption key to/from')
+gflags.DEFINE_integer('key_bits', None,
+                      'Size (in bits) of new RSA key')
+gflags.DEFINE_string('set', None,
+                     'Set name to publish to')
+gflags.DEFINE_string('source_set', None,
+                     'Set name to publish from; defaults to target set')
+gflags.DEFINE_boolean('incremental', True,
+                      'Write only differences to existing tables, instead of '
+                      'clearing tables and starting from scratch')
+gflags.DEFINE_multistring('comment_name', [], 'Comment name to retrieve.')
 
 
 _COMMANDS = {'decrypt-hash':     utils.DecryptHashInteractive,
