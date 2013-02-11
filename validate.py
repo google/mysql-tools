@@ -1,6 +1,6 @@
-#!/usr/bin/python2.6
+#!/usr/bin/python2
 #
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,12 +22,13 @@
 from parser_lib import validator
 from pylib import app
 from pylib import db
-from pylib import flags
 from pylib import schema
 
-FLAGS = flags.FLAGS
+import gflags
 
-flags.DEFINE_string('db', None, 'DB spec to read from')
+FLAGS = gflags.FLAGS
+
+gflags.DEFINE_string('db', None, 'DB spec to read from')
 
 
 def main(argv):
