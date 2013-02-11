@@ -1,5 +1,3 @@
-#!/usr/bin/python2.6
-#
 # Copyright 2011 Google Inc.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,9 +30,9 @@ import pyparsing as pyp
 import re
 
 try:
-  from pylib import db
-except ImportError:
   from ..pylib import db
+except (ImportError, ValueError):
+  from pylib import db
 
 
 class Error(Exception): pass
@@ -104,6 +102,8 @@ class SQLParser(object):
         self._base_loc = self._loc + len(statement) + 1
     except pyp.ParseException as e:
       raise ParseError(e.msg, self._base_loc + e.loc)
+    except db.InputRemaining as e:
+      raise ParseError('Input remaining: %s' % e, self._base_loc + self._loc)
 
   # DISCARDED
 
@@ -563,6 +563,11 @@ class SQLParser(object):
       + _IDENTIFIER.setResultsName('character_set')
       ).setResultsName('convert')
 
+  _ALTER_CHARACTER_SET = pyp.Group(
+      _CHARACTER_TOKEN + _SET_TOKEN
+      + _IDENTIFIER.setResultsName('character_set')
+      ).setResultsName('alter_charset')
+
   # The various ALTER TABLE operations supported:
   # - ADD PRIMARY KEY
   # - ADD INDEX
@@ -583,6 +588,7 @@ class SQLParser(object):
       | _ALTER_TABLE_DROP_COLUMN
       | _ALTER_TABLE_ALTER
       | _ALTER_TABLE_CONVERT
+      | _ALTER_CHARACTER_SET
       ).setResultsName('operations')
 
   _ALTER_TABLE_SQL = pyp.Group(_ALTER_TOKEN
@@ -590,6 +596,17 @@ class SQLParser(object):
                                + _TABLE_NAME
                                + pyp.delimitedList(_ALTER_TABLE_OPERATIONS)
                                ).setResultsName('alter')
+
+  _ALTER_DATABASE_OPERATIONS = pyp.Group(
+      _ALTER_CHARACTER_SET
+      ).setResultsName('operations')
+
+  _ALTER_DATABASE_SQL = pyp.Group(
+      _ALTER_TOKEN
+      + _DATABASE_TOKEN
+      + _DB_NAME
+      + pyp.delimitedList(_ALTER_DATABASE_OPERATIONS)
+      ).setResultsName('alter_db')
 
   # CREATE STATEMENTS
 
@@ -949,7 +966,7 @@ class SQLParser(object):
   # INSERT/REPLACE STATEMENTS
 
   _VALUES = pyp.Group(pyp.Suppress('(')
-                      + pyp.delimitedList(_VAL | _EXPRESSION)
+                      + pyp.delimitedList(_EXPRESSION)
                       + pyp.Suppress(')')
                       ).setResultsName('vals')
 
@@ -1049,6 +1066,7 @@ class SQLParser(object):
   # MAIN
 
   _STATEMENT << pyp.Group(_ALTER_TABLE_SQL
+                          | _ALTER_DATABASE_SQL
                           | _CREATE_TABLE_SQL
                           | _CREATE_TABLE_LIKE_SQL
                           | _DROP_TABLE_SQL
