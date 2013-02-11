@@ -1,6 +1,6 @@
-#!/usr/bin/python2.6
+#!/usr/bin/python2
 #
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -38,16 +38,17 @@ import logging
 import signal
 import time
 
+import gflags
+
 from pylib import app
 from pylib import db
-from pylib import flags
 
-FLAGS = flags.FLAGS
+FLAGS = gflags.FLAGS
 
-flags.DEFINE_integer('connection_lifetime', 60, 'Time (s) between reconnects '
-                     'to the database')
-flags.DEFINE_string('dbspec', None, 'DBSpec of database to connect to')
-flags.DEFINE_float('interval', 1.0, 'Interval in (s) of heartbeat pulse.')
+gflags.DEFINE_integer('connection_lifetime', 60, 'Time (s) between reconnects '
+                      'to the database')
+gflags.DEFINE_string('dbspec', None, 'DBSpec of database to connect to')
+gflags.DEFINE_float('interval', 1.0, 'Interval in (s) of heartbeat pulse.')
 
 
 def BeatOnce(dbh, interval):
