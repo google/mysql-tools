@@ -1,6 +1,4 @@
-#!/usr/bin/python2.6
-#
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,9 +28,9 @@ import logging
 import threading
 
 try:
-  from pylib import db
-except ImportError:
   from ..pylib import db
+except (ImportError, ValueError):
+  from pylib import db
 
 import define
 import utils
@@ -62,7 +60,7 @@ COPY_MAP = {
     }
 
 
-def Copy(dbh, set_name):
+def Copy(dbh, set_name, flush=True):
   """Copies the permission set from the admin.* tables to the mysql.* tables.
 
   Tables copied are::
@@ -79,6 +77,7 @@ def Copy(dbh, set_name):
   Args:
     dbh: A connected database handle (pylib.db).
     set_name: The permissions set name, e.g. "primary", "secondary".
+    flush: If True, activate newly-copied permissions.
   """
   with db.Lock(dbh, 'permissions copy'):
     with db.Transaction(dbh) as trx:
@@ -95,7 +94,7 @@ def Copy(dbh, set_name):
           ' WHERE MysqlPermissionSetId=%(set_id)s', {'set_id': set_id})
       assert result[0]['c'], 'Permissions copy with blank user table'
 
-      for dest, source in COPY_MAP.iteritems():
+      for dest, source in sorted(COPY_MAP.iteritems()):
         result = dbh.ExecuteOrDie('DESC %s' % dest)
         columns = [row['Field'] for row in result]
         columns_str = ','.join(columns)
@@ -110,7 +109,8 @@ def Copy(dbh, set_name):
                        ' LastPushed=FROM_UNIXTIME(%(last_pushed)s)',
                        {'set_id': set_id,
                         'last_pushed': last_updated})
-    dbh.ExecuteOrDie('FLUSH LOCAL PRIVILEGES')
+    if flush:
+      dbh.ExecuteOrDie('FLUSH LOCAL PRIVILEGES')
 
 
 def GetPermissionSetId(dbh, set_name):
@@ -156,7 +156,15 @@ class PermissionsFile(object):
     else:
       self._decryption_key = None
 
-  def Parse(self, permissions_contents):
+  def Parse(self, permissions_contents, define_overrides=None):
+    """Parses permissions definitions.
+
+    Args:
+      permissions_contents: string containing Python code that defines
+        permissions, using the framework provided in define.py.
+      define_overrides: An optional dict whose values override the normal
+        execution environment from define.py.
+    """
     code = compile(permissions_contents, 'permissions contents', 'exec')
 
     # TODO(flamingcow): There is a race when using two instances of
@@ -166,12 +174,15 @@ class PermissionsFile(object):
       # This is self.globals as a backwards-compat hack, because there are some
       # users of this class that want to get at things from the permissions file
       # other than SETS.
-      self.globals = define.__dict__
+      # TODO(unbrice): Remove the hack, it seems there is only one user anyway.
+      self.globals = define.__dict__.copy()
+      if define_overrides:
+        self.globals.update(define_overrides)
       # Reset define's global state. This makes multiple instantiations of
       # PermissionsFile work.
       self.globals['SETS'].clear()
       self.globals['SETS'].update(self._sets)
-      exec(code, self.globals)
+      exec code in self.globals
       self._sets = self.globals['SETS'].copy()
 
   def GetSetTables(self, dbh, set_name):
@@ -192,8 +203,7 @@ class PermissionsFile(object):
       for row in old_table.GetRows():
         if row[db_index] == 'DATABASE()':
           row[db_index] = define.DEFAULT
-    old_rows = old_table - new_table
-    new_rows = new_table - old_table
+    new_rows, old_rows = new_table.Diff(old_table)
     args = {}
     args['db'], args['table'] = name.split('.', 1)
     query = """
@@ -264,7 +274,8 @@ SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE
     """Generate SQL to delete and rebuild table contents."""
     if delete_where:
       yield 'DELETE FROM %s WHERE %s;' % (name, delete_where)
-    for sql in table.GetInsertSQLList(name, max_size=2**20):
+    for sql in table.GetInsertSQLList(name, max_size=2**20,
+                                      on_duplicate_key_update=True):
       yield sql
 
   @classmethod
@@ -280,7 +291,7 @@ SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE
       map: mapping dict from keys in tables to database table names
     """
     sql = []
-    for name, table in tables.iteritems():
+    for name, table in sorted(tables.iteritems()):
       if map:
         name = map[name]
       if incremental and dbh:
@@ -375,6 +386,7 @@ SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE
           used by copiers to decide when to copy.
       incremental: Whether the publish should attempt to make minimal changes to
           the destination tables, rather than just wiping them.
+      extra_where: An additional where clause, see below.
     """
     set_id = GetPermissionSetId(dbh, dest_set_name)
     tables = self.GetSetTables(dbh, set_name)
@@ -420,8 +432,8 @@ SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE WHERE
       incremental: Whether the publish should attempt to make minimal changes to
           the destination tables, rather than just wiping them.
     """
-    for set in self._sets:
-      tables = self.GetSetTables(dbh, set)
+    for permissions_set in self._sets:
+      tables = self.GetSetTables(dbh, permissions_set)
       for _ in self.GetSQL(dbh, tables, '1', self.PUSH_MAP,
                            incremental=incremental):
         pass

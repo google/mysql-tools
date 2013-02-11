@@ -1,6 +1,4 @@
-#!/usr/bin/python2.6
-#
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -49,19 +47,17 @@ import copy
 import functools
 
 try:
-  from pylib import db
-except ImportError:
   from ..pylib import db
+except (ValueError, ImportError):
+  from pylib import db
 
 import utils
 
 
+# Dictionary of setname -> Set.
+# This variable is used during push/publish/dump operations; it should not
+# appear in a permissions file.
 SETS = {}
-"""Dictionary of setname -> Set.
-
-This variable is used during push/publish/dump operations; it should not appear
-in a permissions file.
-"""
 
 
 class Error(Exception):
@@ -108,6 +104,10 @@ class DecryptionFailed(Error):
   """Raised when decryption fails, due to invalid key or data."""
 
 
+class NoAllowedHosts(Error):
+  """Account has no allowed hosts but is exported."""
+
+
 _TOTAL_PRIVS = 28
 _PRIVS = [2**x for x in xrange(_TOTAL_PRIVS)]
 (
@@ -148,7 +148,7 @@ ALL_PRIVILEGES = sum(_PRIVS)
 
 # Using this in place of a database name causes substitution for the "main
 # database", e.g. "ads54".
-DEFAULT = ('literal', 'DATABASE()')
+DEFAULT = db.Literal('DATABASE()')
 """Refers to the (sharded) database name.
 
 This is used to indicate that a permission should be set on the database
@@ -522,13 +522,9 @@ class _TablePermission(_BasePermission, _SetPrivsMixIn):
     if not dbh:
       raise NeedDBAccess('Need to retrieve table list from %s' %
                          str(fixed_values['Db']))
-    if fixed_values['Db'] == DEFAULT:
-      dbname = 'DATABASE()'
-    else:
-      dbname = "'%s'" % fixed_values['Db'].replace("'", "''")
     result = dbh.CachedExecuteOrDie(
         'SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE'
-        ' TABLE_SCHEMA=%s' % dbname)
+        ' TABLE_SCHEMA=%(Db)s', fixed_values)
     return [row['TABLE_NAME'] for row in result]
 
 
@@ -959,6 +955,10 @@ class Account(object):
     fixed_values = {
         'Password': self._password_hash,
         }
+
+    if not self._allowed_hosts:
+      raise NoAllowedHosts('Account %s has no allowed hosts',
+                           self.GetUsername())
 
     for host in sorted(self._allowed_hosts):
       fixed_values['Host'] = host
