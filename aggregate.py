@@ -1,5 +1,17 @@
-#!/usr/bin/python2.6
+#!/usr/bin/python2
 # Copyright 2011 Google Inc. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Aggregate CSV input to CSV output.
 
@@ -28,18 +40,19 @@ __author__ = 'flamingcow@google.com (Ian Gulliver)'
 import csv
 import sys
 
+import gflags
+
 from pylib import app
-from pylib import flags
 
-FLAGS = flags.FLAGS
+FLAGS = gflags.FLAGS
 
-flags.DEFINE_multistring('max', [], 'Name of column to find maximum')
-flags.DEFINE_multistring('min', [], 'Name of column to find minimum')
-flags.DEFINE_multistring('sum', [], 'Name of column to sum')
-flags.DEFINE_multistring('sort', [], 'Name of column to sort by')
+gflags.DEFINE_multistring('max', [], 'Name of column to find maximum')
+gflags.DEFINE_multistring('min', [], 'Name of column to find minimum')
+gflags.DEFINE_multistring('sum', [], 'Name of column to sum')
+gflags.DEFINE_multistring('sort', [], 'Name of column to sort by')
 
 
-def main(argv):
+def main(unused_argv):
   input_csv = csv.DictReader(sys.stdin)
   output_csv = csv.DictWriter(sys.stdout, input_csv.fieldnames)
 
