@@ -1,6 +1,4 @@
-#!/usr/bin/python2.6
-#
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+"""Some utilities for working with table ranges."""
 
 import db
 import schema
@@ -27,7 +25,7 @@ class PrimaryKeyRange(object):
 
   This class provides operations on MySQL rows by PRIMARY KEY ranges.
   Find the last row of a range, the first row of a range, the nth row of a
-  a range and all rows that are  within a primary key range.
+  a range and all rows that are within a primary key range.
 
   Typical usage:
     t = PrimaryKeyRange(dbh, 'db', 'table')
@@ -57,8 +55,7 @@ class PrimaryKeyRange(object):
 
   def _PrimaryKeyForSelect(self):
     """Format primary key column list for use in a SELECT statement."""
-    return ', '.join('CONVERT(%s USING binary) AS %s' % (column, column)
-                     for column in self._table.GetPrimaryKey())
+    return ', '.join('`%s`' % column for column in self._table.GetPrimaryKey())
 
   def GetFirstPrimaryKeyValue(self, optional_where='1'):
     """Return the PRIMARY KEY for the first row of the table.
@@ -98,7 +95,7 @@ class PrimaryKeyRange(object):
     # ORDER BY a DESC, b DESC, c DESC
     order_desc = []
     for c in self._table.GetPrimaryKey():
-      order_desc.append('%s DESC' % c)
+      order_desc.append('`%s` DESC' % c)
 
     attrs = self._attrs.copy()
     attrs['select'] = self._PrimaryKeyForSelect()
@@ -118,10 +115,10 @@ class PrimaryKeyRange(object):
       parts = []
       if predicate:
         parts.append(' AND '.join(predicate))
-      parts.append('%s %s _binary%s' % (
+      parts.append('`%s` %s %s' % (
           col, operator, self._dbh.Escape(key[col])))
       ret.append(' AND '.join(parts))
-      predicate.append('%s = _binary%s' % (
+      predicate.append('`%s` = %s' % (
           col, self._dbh.Escape(key[col])))
     return ' OR '.join(ret)
 
@@ -178,7 +175,7 @@ class PrimaryKeyRange(object):
       if start_key[col] != end_key[col]:
         break
       cols.pop(0)
-      predicate.append('%s = _binary%s' % (
+      predicate.append('`%s` = %s' % (
           col, self._dbh.Escape(start_key[col])))
     return ' AND '.join(predicate) or '1'
 
@@ -198,12 +195,12 @@ class PrimaryKeyRange(object):
       return '1'
     if len(cols) == 1:
       col = cols[0]
-      return '%s = _binary%s' % (
+      return '`%s` = %s' % (
           col, self._dbh.Escape(key[col]))
     else:
       col1 = cols[0]
       col2 = cols[1]
-      return '(%s = _binary%s AND (%s %s _binary%s OR %s))' % (
+      return '(`%s` = %s AND (`%s` %s %s OR %s))' % (
           col1, self._dbh.Escape(key[col1]),
           col2, operator, self._dbh.Escape(key[col2]),
           self._GenerateRangeSide(key, operator, cols[1:]))
@@ -222,7 +219,7 @@ class PrimaryKeyRange(object):
     if not cols:
       return '1'
     col = cols[0]
-    return '(%s > _binary%s AND %s < _binary%s)' % (
+    return '(`%s` > %s AND `%s` < %s)' % (
         col, self._dbh.Escape(start_key[col]),
         col, self._dbh.Escape(end_key[col]))
 

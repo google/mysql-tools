@@ -1,6 +1,4 @@
-#!/usr/bin/python2.6
-#
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -49,6 +47,8 @@ class BlockingCallback(object):
     self._calls_remaining = num_calls
     self._lock = threading.Lock()
     self._event = threading.Event()
+    self._exception = None
+    self._result = None
 
   def __call__(self, *args, **kwargs):
     """Make this object magically callable."""
@@ -57,11 +57,33 @@ class BlockingCallback(object):
       if self._calls_remaining > 0:
         return
       assert self._calls_remaining == 0
-    ret = None
-    if self._callback:
-      ret = self._callback(*args, **kwargs)
-    self._event.set()
-    return ret
+    try:
+      if self._callback:
+        self._result = self._callback(*args, **kwargs)
+        # reset any previous exception now.
+        self._exception = None
+    except Exception as err:
+      self._exception = err
+      self._result = None
+      # this does not change the old semantics
+      # result can be obtained from .GetResult().
+      raise
+    finally:
+      self._event.set()
+    return self._result
+
+  def GetResult(self):
+    """Get the result of the latest callback call.
+
+    If the operation is incomplete the return value will be None.  If the
+    operation raised an exception, the same exception will be raised here.
+
+    Returns:
+      The result of the latest callback call.
+    """
+    if self._exception:
+      raise self._exception
+    return self._result
 
   def Wait(self):
     """Block until called num_calls times and the callback completes."""
@@ -193,6 +215,10 @@ class EventManager(object):
         # We ran out of threads to pop.
         pass
 
+  def Wait(self):
+    """Wait for the queue of immediate tasks to empty."""
+    self._state.run_queue.join()
+
   @staticmethod
   def _Worker(state):
     """Worker thread main function."""
@@ -209,6 +235,8 @@ class EventManager(object):
         callback()
       except Exception:
         logging.exception('Exception inside %s', callback)
+      finally:
+        state.run_queue.task_done()
 
   @staticmethod
   def _Scheduler(state):

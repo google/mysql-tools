@@ -1,7 +1,4 @@
-#!/usr/bin/python2.6
-# vim: set fileencoding=utf8 :
-#
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -42,9 +39,9 @@ class Schema(object):
   """A representation of important data about the in-database schema.
 
   Schema
-  ↳ Database
-    ↳ Table
-      ↳ Column
+  - Database
+    - Table
+      - Column
 
   Data is loaded lazily from the database handle provided. The in-memory
   schema representation is mutable to support simulation of changes.

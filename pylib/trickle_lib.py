@@ -1,6 +1,4 @@
-#!/usr/bin/python2.6
-#
-# Copyright 2006 Google Inc.
+# Copyright 2006 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -64,7 +62,7 @@ class TrickledOperation(object):
     It is valid to execute multiple loops, and this method will be
     invoked for each.  Useful for finding the next starting position.
     """
-    raise NotImplementedError("call to pure virtual function")
+    raise NotImplementedError('call to pure virtual function')
 
   def _FinalizeTrickle(self):
     """A completion method copied after a series of trickle loops.
@@ -72,11 +70,11 @@ class TrickledOperation(object):
     Intended to finish up state, such as the final 'slosh' rows of a
     continual copy loop.
     """
-    raise NotImplementedError("call to pure virtual function")
+    raise NotImplementedError('call to pure virtual function')
 
   def _Finished(self):
-    "Called to determine if a trickle is complete."
-    raise NotImplementedError("call to pure virtual function")
+    """Called to determine if a trickle is complete."""
+    raise NotImplementedError('call to pure virtual function')
 
   def _PerformTrickle(self, batch_size):
     """The method invoked to perform the actual trickle operation.
@@ -91,7 +89,7 @@ class TrickledOperation(object):
     Returns:
       number of items processed (usually batch_size)
     """
-    raise NotImplementedError("call to pure virtual function")
+    raise NotImplementedError('call to pure virtual function')
 
   def _GetProgress(self):
     """Called to fetch progress information
@@ -115,8 +113,8 @@ class TrickledOperation(object):
     the throttler will be unable to detect.
 
     Args:
-      n - how many queries may be run in a batch.  Values above
-          1000000 are probably ill-advised.
+      n: How many queries may be run in a batch. Values above 1000000 are
+          probably ill-advised.
     """
     self._batch_size_limit = n
 
@@ -218,17 +216,17 @@ class TrickledOperation(object):
     else:
       progress = ''
 
-    logging.info("batch of %d in %.2f s%s, sleeping %.2f s"
+    logging.info('batch of %d in %.2f s%s, sleeping %.2f s'
                  % (batch_size, time_delta, progress, sleep_time))
-    logging.info("util %.2f, new batch size %d "
-                 "(%.2f current, %.2f avg rows/sec)"
-                 % (time_delta/(time_delta+sleep_time),
+    logging.info('util %.2f, new batch size %d '
+                 '(%.2f current, %.2f avg rows/sec)'
+                 % (time_delta / (time_delta + sleep_time),
                     self._batch_size,
                     current_rate_avg,
-                    rows_copied/(time.time() - start_time)))
+                    rows_copied / (time.time() - start_time)))
 
   def _LogFinish(self, rows_copied, start_time):
-    logging.info("Done: %.2f avg rows/sec",
+    logging.info('Done: %.2f avg rows/sec',
                  (rows_copied / (time.time() - start_time)))
 
 
