@@ -1,6 +1,4 @@
-#!/usr/bin/python2.6
-#
-# Copyright 2012 Google Inc.
+# Copyright 2012 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,20 +29,21 @@ __author__ = 'lasersox@google.com (AJ Ross)'
 import csv
 import sys
 
+import gflags
+
 from pylib import app
 from pylib import db
-from pylib import flags
 
-FLAGS = flags.FLAGS
+FLAGS = gflags.FLAGS
 
-flags.DEFINE_string('charset', 'utf8',
-                    'Input/output character set')
-flags.DEFINE_string('query', None,
-                    'An SQL query.')
-flags.DEFINE_string('output_type', 'csv',
-                    'The output type, eg, csv.')
-flags.DEFINE_boolean('header', True,
-                     'Add header to CSV.')
+gflags.DEFINE_string('charset', 'utf8',
+                     'Input/output character set')
+gflags.DEFINE_string('query', None,
+                     'An SQL query.')
+gflags.DEFINE_string('output_type', 'csv',
+                     'The output type, eg, csv.')
+gflags.DEFINE_boolean('header', True,
+                      'Add header to CSV.')
 
 
 class Error(Exception):
