@@ -1,6 +1,4 @@
-#!/usr/bin/python2.6
-#
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,9 +35,9 @@ import traceback
 import parser
 
 try:
-  from pylib import schema
-except ImportError:
   from ..pylib import schema
+except (ImportError, ValueError):
+  from pylib import schema
 
 
 class Error(Exception): pass
@@ -52,6 +50,10 @@ class ValidationError(Error):
 
   def __str__(self):
     return '%s (at char %d)' % (self.msg, self.loc)
+
+
+class Cancelled(Error):
+  """Cancel callback returned True."""
 
 
 ParseError = parser.ParseError
@@ -77,7 +79,8 @@ def OnlyIfDescendedFrom(tag_names):
 class Validator(object):
   """Validate a set of parsed SQL statements."""
 
-  def __init__(self, db_schema=None, progress_callback=None):
+  def __init__(self, db_schema=None, progress_callback=None,
+               cancel_check_callback=None):
     """Constructor.
 
     Args:
@@ -85,12 +88,21 @@ class Validator(object):
         storing local mutations.
       progress_callback: Called with character location after each statement is
         validated.
+      cancel_check_callback: Called to check if we've been cancelled. Returning
+        True will cancel the current operation.
     """
     self._schema = db_schema or schema.Schema()
     self._callback = progress_callback
+    self._cancel_check_callback = cancel_check_callback
     self._errors = []
     self._warnings = []
     self._loc = 0
+
+  def _CheckCancelled(self):
+    if not self._cancel_check_callback:
+      return
+    if self._cancel_check_callback():
+      raise Cancelled
 
   def ValidateTree(self, queries, additional_visitors=(),
                    max_alter_rows=100000, # for AlterChecker
@@ -119,6 +131,7 @@ class Validator(object):
     # We iterate query-by-query, so each visitor can modify the token tree and
     # things happen in the right order.
     for query in queries:
+      self._CheckCancelled()
       assert query.getName() == 'query', (
           'Invalid second-level token: %s' % (query.getName()))
       logging.debug('Visiting: %s', query)
@@ -595,6 +608,8 @@ class ColumnChecker(Visitor):
     except KeyError:
       # Not enough info, we have to scan
       column_name = tokens['column'][0]
+      if column_name == '*' and self.IsDescendedFrom(['select_expression']):
+        return
       results = set()
       logging.debug('Searching for %s in: %s', column_name, table_aliases)
       for table_spec in table_aliases.itervalues():
