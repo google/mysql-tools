@@ -1,6 +1,6 @@
-#!/usr/bin/python2.6
+#!/usr/bin/python2
 #
-# Copyright 2011 Google Inc.
+# Copyright 2011 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -38,17 +38,19 @@ import re
 import readline
 import sys
 
+import gflags
+
 from pylib import app
 from pylib import db
-from pylib import flags
 
-FLAGS = flags.FLAGS
+FLAGS = gflags.FLAGS
 
-flags.DEFINE_string('charset', 'utf8', 'Input/output character set')
-flags.DEFINE_string('prompt', None, 'Custom prompt instead of the dbspec')
-flags.DEFINE_boolean('print_field_names', True,
-                     'Print field names to CSV and stdout.')
-_CSV_RE = re.compile('^\s*CSV\s+(?P<query>.*)$',
+gflags.DEFINE_string('charset', 'utf8', 'Input/output character set')
+gflags.DEFINE_string('prompt', None, 'Custom prompt instead of the dbspec')
+gflags.DEFINE_boolean('print_field_names', True,
+                      'Print field names to CSV and stdout.')
+
+_CSV_RE = re.compile(r'^\s*CSV\s+(?P<query>.*)$',
                      re.IGNORECASE | re.DOTALL | re.MULTILINE)
 
 
@@ -103,14 +105,17 @@ class CancellableExecutor(object):
 
     self.ongoing_operation = self.dbh.Submit(query)
     results = self.dbh.Wait(self.ongoing_operation)
-    for key, value in results.items():
-      results[key] = list(value)[0]
+    for key, values in results.items():
+      for value in values:
+        results[key] = value
+        # TODO(flamingcow): Handle multiple results here
+        break
     self.ongoing_operation = None
 
     if csvh:
       if FLAGS.print_field_names:
         csvh.writerow(results.values()[0].GetFields())
-      for host, result in results.iteritems():
+      for result in results.itervalues():
         for row in result.GetRows():
           fields = []
           for field in row:
