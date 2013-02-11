@@ -1,6 +1,4 @@
-#!/usr/bin/python2.6
-#
-# Copyright 2007-2011 Google Inc.
+# Copyright 2007 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,9 +28,12 @@ import time
 import drift_policies
 
 try:
-  from pylib import range_lib
-except ImportError:
+  from ..pylib import db
   from ..pylib import range_lib
+except (ImportError, ValueError):
+  from pylib import db
+  from pylib import range_lib
+
 
 def VerifyTableNameFormat(tables):
   """Verify each table in tables is in db_name.table_name format.
@@ -53,9 +54,33 @@ def VerifyTableNameFormat(tables):
   else:
     temp_tables = tables
   for table in temp_tables:
-    if not re.match('(\w+)\.(\w+)', table):
+    if not re.match(r'(\w+)\.(\w+)', table):
       raise Error('Given table %s is not in db.table format.' % table)
   return tables
+
+
+def VerifyAdminTables(dbh, admin_tables):
+  """Verify that all required admin tables exist.
+
+  Args:
+    dbh: a db.py Connection instance.
+    admin_tables: A list of tables that must exist.
+  Raises:
+    AdminTablesMissing: in case they're missing.
+  """
+  for table in admin_tables:
+    # Tables must be in db.table_name format
+    VerifyTableNameFormat(table)
+    db_name, table_name = table.split('.')
+    query_dict = {}
+    query_dict['db_name'] = db_name
+    query_dict['table_name'] = table_name
+    res = dbh.ExecuteOrDie('SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE '
+                           'TABLE_SCHEMA = %(db_name)s '
+                           'AND TABLE_NAME = %(table_name)s',
+                           query_dict)
+    if not res or len(res) != 1:
+      raise AdminTablesMissing('%s was missing' % table)
 
 
 class Error(Exception):
@@ -91,21 +116,22 @@ class DbChecksummer(object):
                tables_to_check=(), column_types_to_skip=(),
                databases_to_skip=('information_schema',),
                database_to_check=None):
-    """Initialize the DbChecksummer.
+    """Initializes the DbChecksummer.
 
     Args:
       dbh: Database connection handle.
       result_table: Table name to write statement-based results to (possibly
-        different on master/slave).
+          different on master/slave).
       golden_table: Table name to write golden results to (authoritative from
-        master).
+          master).
+      log_table: Table name used to write the last checksum completion time.
       job_started: MySQL-formatted date of job start.
       scan_rate: Estimated checksum speed in input bytes per person.
       secs_per_query: Seconds per query (used to auto-scale rows_per_query).
       rows_per_query: Suggested rows per checksum query (overrides
-        secs_per_query).
+          secs_per_query).
       hours_to_run: Hours to run until completion of a full checksum pass
-        (overrides utilization).
+          (overrides utilization).
       utilization: Fraction of time to query db.
       tables_to_skip: Tuple of tables to skip.
       engines_to_check: Tuple of storage engines to check.
@@ -119,9 +145,10 @@ class DbChecksummer(object):
              secs_per_query, and hours_to_run are missing.
     """
     self._dbh = dbh
-    self._result_table = VerifyTableNameFormat(result_table)
-    self._golden_table = VerifyTableNameFormat(golden_table)
-    self._log_table = VerifyTableNameFormat(log_table)
+    VerifyAdminTables(dbh, [result_table, golden_table, log_table])
+    self._result_table = result_table
+    self._golden_table = golden_table
+    self._log_table = log_table
     self._job_started = (job_started or
                          self._dbh.ExecuteOrDie('SELECT NOW()')[0]['NOW()'])
     self._tables = []
@@ -181,7 +208,6 @@ class DbChecksummer(object):
     Returns:
       The original sql or sql with more filters appended to it.
     """
-
     if not filter_values or len(filter_values) < 1:
       return sql
     filter_values = '(%s) ' % ','.join("'" + p + "'" for p in filter_values)
@@ -189,10 +215,11 @@ class DbChecksummer(object):
     return sql
 
   def _LogChecksumCompletion(self, table_schema, table_name):
-    """Update the admin.ChecksumsComplete table to reflect  checksum complete.
+    """Update the admin.ChecksumsComplete table to reflect checksum complete.
 
     Args:
-      table_name (str): The name of the table that has completed.
+      table_schema: The name of the schema/db containing the table.
+      table_name: The name of the table that has completed.
     Returns:
       None
     """
@@ -200,11 +227,10 @@ class DbChecksummer(object):
       (DatabaseName, TableName, LastChecksumTime)
       VALUES (%(db_name)s, %(table_name)s, NOW())
     """
-    params = {'log_table': ('literal',self._log_table),
+    params = {'log_table': db.Literal(self._log_table),
               'db_name': table_schema,
               'table_name': table_name}
     self._dbh.ExecuteOrDie(sql, params)
-
 
   def _AnalyzeTables(self):
     """Retrieve db schema information to plan/schedule checksumming job.
@@ -311,11 +337,7 @@ class DbChecksummer(object):
                    self._tables[self._position])
       # Table has completed checksum, log completion.
       db_name, table_name = self._tables[self._position].GetTableName()
-      try:
-        self._LogChecksumCompletion(db_name, table_name)
-      except Exception as e:
-        logging.exception(e)
-        raise AdminTablesMissing(str(e))
+      self._LogChecksumCompletion(db_name, table_name)
       self._position += 1
       while (self._position < len(self._tables) and not
              self._tables[self._position]._PrepareToChecksumTable()):
@@ -370,8 +392,7 @@ class TableChecksummer(object):
   """
 
   def __init__(self, dbh, monitor, batch_sizer, database, table, job_started,
-               result_table, golden_table, column_types_to_skip=(),
-               row_condition=''):
+               result_table, golden_table, column_types_to_skip=()):
     """Initialize TableChecksummer.
 
     Args:
@@ -384,7 +405,6 @@ class TableChecksummer(object):
       result_table: Table to write statement-generated checksums to.
       golden_table: Table to write literal checksums to.
       column_types_to_skip: List of column tables to not checksum.
-      row_condition: SQL expression to choose which rows to checksum.
     """
     self._dbh = dbh
     self._monitor = monitor
@@ -413,11 +433,8 @@ class TableChecksummer(object):
   def _GetChecksumSelectExpr(self):
     """Return the SELECT column list portion of the query string.
 
-    This should return a string of the form:
-    CONCAT_WS(':', colA, ORDERED_CHECKSUM(colA), ...)
-
-    Args:
-      columns: the list of columns in this table
+    Returns:
+      A string like: CONCAT_WS(':', colA, ORDERED_CHECKSUM(colA), ...)
     """
     col_list = ['":"']
     for col in self._columns:
@@ -425,15 +442,6 @@ class TableChecksummer(object):
       col_list.append('ORDERED_CHECKSUM(%s)' %(col))
 
     return 'CONCAT_WS(%s)' %(','.join(col_list))
-
-  def _GetOffsetsSelectExpr(self, from_key, to_key):
-    col_list = []
-    for col in self._primary_key:
-      col_list.append(col)
-      col_list.append(from_key.get(col))
-      col_list.append(to_key.get(col))
-
-    return ':'.join(col_list)
 
   def _SetDatabaseHandle(self, dbh):
     """After unpickling, we need to set the database connection handle.
@@ -462,7 +470,8 @@ class TableChecksummer(object):
 
   def _GenerateChecksumQuery(self, from_key, to_key):
     self._query_dict['chunk'] = self._chunk
-    self._query_dict['offsets'] = self._GetOffsetsSelectExpr(from_key, to_key)
+    self._query_dict['offsets'] = self._dbh.Escape(
+        self._range.GenerateRangeWhere(from_key, to_key))
     self._query_dict['started'] = time.time()
     self._query_dict['where'] = self._range.GenerateRangeWhere(from_key, to_key)
     return self.CHECKSUM_QUERY % self._query_dict
@@ -475,9 +484,6 @@ class TableChecksummer(object):
 
     Returns:
       False when the table has completed checksumming, True otherwise.
-
-    Raises:
-      AdminTableMissing: If drift table doesn't exist.
     """
     from_key = self._from_key
     if not from_key:
@@ -486,10 +492,11 @@ class TableChecksummer(object):
                                                     %(self.db_name,
                                                       self.table_name))
     logging.info('Processing table: %s.%s bs: %s chunk: %s',
-      self.db_name, self.table_name, batch_size, self._chunk)
+                 self.db_name, self.table_name, batch_size, self._chunk)
     to_key = self._range.GetNthPrimaryKeyValue(batch_size, from_key)
     cs_query = self._GenerateChecksumQuery(from_key, to_key)
     start_time = time.time()
+    count = None
     try:
       self._dbh.ExecuteOrDie(cs_query)
       count = self._dbh.ExecuteOrDie('SELECT @count')
@@ -500,8 +507,9 @@ class TableChecksummer(object):
     rows_read = count[0]['@count']
     if not rows_read:
       return False
-    self._monitor.RecordProgress(rows_read, time.time() - start_time,
-      '%s.%s' %(self.db_name, self.table_name))
+    self._monitor.RecordProgress(
+        rows_read, time.time() - start_time,
+        '%s.%s' %(self.db_name, self.table_name))
     self._monitor.ReportPerformance()
     self._ReinsertByValue()
     self._chunk += 1
@@ -509,7 +517,7 @@ class TableChecksummer(object):
     # Completion conditions
     if from_key == to_key or (batch_size + 1) != rows_read:
       logging.info('%s == %s or %s != %s',
-        from_key, to_key, batch_size + 1, rows_read)
+                   from_key, to_key, batch_size + 1, rows_read)
       return False
     return True
 
@@ -524,7 +532,7 @@ class TableChecksummer(object):
     row = rows[0]
 
     self._query_dict['chunk_done_copy'] = row['ChunkDone']
-    self._query_dict['offset_copy'] = row['Offsets']
+    self._query_dict['offset_copy'] = self._dbh.Escape(row['Offsets'])
     self._query_dict['checksum_copy'] = row['Checksums']
     self._query_dict['count_copy'] = row['Count']
     self._dbh.ExecuteOrDie(
@@ -578,7 +586,7 @@ REPLACE INTO %(result_table)s
 (DatabaseName, TableName, Chunk, JobStarted, ChunkDone,
 Offsets, Checksums, Count)
 SELECT '%(db_name)s', '%(table_name)s', %(chunk)s, '%(job_started)s',
-NOW(), '%(offsets)s', %(checksums)s, @count := count(*)
+NOW(), %(offsets)s, %(checksums)s, @count := count(*)
 FROM %(db_name)s.%(table_name)s FORCE INDEX (PRIMARY)
 WHERE %(where)s
 """
@@ -598,9 +606,10 @@ REPLACE INTO %(golden_table)s
 (DatabaseName, TableName, Chunk, JobStarted, ChunkDone,
 Offsets, Checksums, Count)
 VALUES ('%(db_name)s', '%(table_name)s', %(chunk)s, '%(job_started)s',
-'%(chunk_done_copy)s', '%(offset_copy)s', '%(checksum_copy)s',
+'%(chunk_done_copy)s', %(offset_copy)s, '%(checksum_copy)s',
 %(count_copy)s)
 """
+
 
 class DbChecksumVerifier(object):
   """Class for verifying data drift checksums result on a replica database.
@@ -626,8 +635,9 @@ class DbChecksumVerifier(object):
                     such as admin.ChecksumsGolden
     """
     self._dbh = dbh
-    self._result_table = VerifyTableNameFormat(result_table)
-    self._golden_table = VerifyTableNameFormat(golden_table)
+    VerifyAdminTables(dbh, [result_table, golden_table])
+    self._result_table = result_table
+    self._golden_table = golden_table
     self._param_dict = {}
     self._param_dict['result_table'] = self._result_table
     self._param_dict['golden_table'] = self._golden_table
@@ -642,8 +652,6 @@ class DbChecksumVerifier(object):
       True: If no data drift detected.
       False: If data drift detected or other abnormal situation.
 
-    Raises:
-      AdminTableMissing: If drift table doesn't exist.
     """
     if slave_check:
       if not self._dbh.ExecuteOrDie('SHOW SLAVE STATUS'):
@@ -652,21 +660,17 @@ class DbChecksumVerifier(object):
         return False
 
     # Query to see latest computed checksum
-    try:
-      date_results = self._dbh.ExecuteOrDie(self.CHECKSUM_DATE_QUERY %
-                                            self._param_dict)
-      if not date_results:
-        logging.warning('No checksums data computed.')
-        return False
-      # Delete matching checksums
-      self._dbh.ExecuteOrDie(self.DELETE_CHECKSUMS_QUERY % self._param_dict)
+    date_results = self._dbh.ExecuteOrDie(self.CHECKSUM_DATE_QUERY %
+                                          self._param_dict)
+    if not date_results:
+      logging.warning('No checksums data computed.')
+      return False
+    # Delete matching checksums
+    self._dbh.ExecuteOrDie(self.DELETE_CHECKSUMS_QUERY % self._param_dict)
 
-      # Query for remaining checksums
-      checksummed_rows = self._dbh.ExecuteOrDie(self.CHECKSUM_VERIFY_QUERY %
-                                                self._param_dict)
-    except Exception as e:
-      logging.exception(e)
-      raise AdminTablesMissing(str(e))
+    # Query for remaining checksums
+    checksummed_rows = self._dbh.ExecuteOrDie(self.CHECKSUM_VERIFY_QUERY %
+                                              self._param_dict)
 
     if not checksummed_rows:
       return True

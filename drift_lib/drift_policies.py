@@ -1,6 +1,4 @@
-#!/usr/bin/python2.6
-#
-# Copyright 2007-2011 Google Inc.
+# Copyright 2007 Google Inc. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -63,6 +61,9 @@ class ProgressMonitor(object):
 
     Estimates on the size of the entire run, and the size of each table will
     be regenerated.
+
+    Returns:
+      A dict containing various performance related statistics.
     """
     state_dict = {}
     state_dict['scan_rate'] = self.scan_rate
